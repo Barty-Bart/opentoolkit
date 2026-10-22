@@ -8,7 +8,7 @@ from AppKit import NSWorkspace, NSTimer
 from Foundation import NSDistributedNotificationCenter
 from ApplicationServices import (AXUIElementCreateApplication, AXUIElementCopyAttributeValue,AXUIElementSetMessagingTimeout,AXUIElementPerformAction,AXUIElementSetAttributeValue,AXValueCreate,AXValueGetValue,kAXValueCFRangeType)
 from PyObjCTools import AppHelper
-from wake_engine import Detector, MODEL, validate_phrase, command_phrases, migrate_voice_branding
+from wake_engine import Detector, MODEL, validate_phrase, command_phrases, detector_phrases, migrate_voice_branding
 from runtime_paths import speech_data, speech_resources
 log=logging.getLogger('multitool.voice')
 class RecoveryGesture:
@@ -145,8 +145,8 @@ def send_button(target):
             return None
     return None
 
-DEFAULTS={'brandingVersion':1,'wakePhrase':'hey open toolkit','dictationEnabled':True,'wakeEnabled':False,'liveEnabled':False,'sendEnabled':False,'standaloneSend':False,'organizerEnabled':False,'continuousEnabled':False,
- 'phrases':{'start':'start dictating','stop':'stop transcribing','cancel':'cancel dictation','send':'finish and send','screenshot':'take a screenshot','annotate':'draw on screen','record':'record my screen','record_stop':'stop screen recording','note':'take a note','reminder':'make a reminder','meeting':'transcribe a meeting'}}
+DEFAULTS={'brandingVersion':2,'wakePhrase':'hey toolkit','dictationEnabled':True,'wakeEnabled':False,'liveEnabled':False,'sendEnabled':False,'standaloneSend':False,'organizerEnabled':False,'continuousEnabled':False,
+ 'phrases':{'start':'start dictating','stop':'stop transcribing','cancel':'cancel dictation','send':'finish and send','screenshot':'take a screenshot','annotate':'draw on screen','record':'record my screen','record_stop':'stop screen recording','note':'take a note','reminder':'make a reminder','meeting':'transcribe a meeting','summarize':'summarize into bullet points','email':'turn this into an email'}}
 
 class VoiceControl:
     def __init__(self,dictation,paste,play,db):
@@ -161,6 +161,9 @@ class VoiceControl:
         self.status='Speech worker ready';self.locked=False;self.last_command=0.;self.session=''
         self.segment=[];self.segment_frames=0;self.silent=0;self.segment_pending=0;self.segment_lock=threading.RLock();self.send_generation=0
         self.paused_file=speech_data()/'voice-commands.disabled'
+        from command_session import CommandSession
+        self.command_session=CommandSession()
+        self.writing_override=None
         self._config_stamp=0;self._read_config()
         self.timer=NSTimer.scheduledTimerWithTimeInterval_repeats_block_(.3,True,lambda t:self.tick())
         center=NSDistributedNotificationCenter.defaultCenter()
@@ -179,9 +182,9 @@ class VoiceControl:
             stamp=self.config_file.stat().st_mtime_ns
             if stamp==self._config_stamp:return
             c=json.loads(self.config_file.read_text());c=migrate_voice_branding({**c,'phrases':c.get('phrases',DEFAULTS['phrases'])});phrases=c['phrases']
-            command_phrases({**c,'phrases':phrases})
+            detector_phrases({**DEFAULTS,**c,'phrases':{**DEFAULTS['phrases'],**phrases}})
             self.send_generation+=1
-            self.config={**DEFAULTS,**c,'phrases':phrases};self._config_stamp=stamp;self.epoch+=1
+            self.config={**DEFAULTS,**c,'phrases':{**DEFAULTS['phrases'],**phrases}};self._config_stamp=stamp;self.epoch+=1
             self.enabled=bool(c.get('wakeEnabled',False)) and not self.paused_file.exists()
             self.label()
         except FileNotFoundError:pass
@@ -221,6 +224,8 @@ class VoiceControl:
             self.emit('correction_suggestion',action=identifier,text=old,message=new)
     def tick(self):
         self._read_config()
+        if self.command_session.expire(time.monotonic(),self.epoch):
+            self.d.end_wake_feedback();self.label()
         try:self.poll_correction()
         except Exception:
             self.edit_watch=None
@@ -232,7 +237,7 @@ class VoiceControl:
                 if c.get('action')=='system_audio' or time.time()-c.get('time',0)<30:self.command(c.get('action',''),c)
             except Exception:log.exception('voice control request failed')
             finally:path.unlink(missing_ok=True)
-        state={'time':time.time(),'status':self.status,'recording':self.d.recording,'busy':self.d.busy,'wake':self.enabled,'microphone':self.mic_ready,'detectorReady':self.detector_ready,'mode':self.long_mode or self.capture_mode,'level':float(self.d.level),'segmentPending':self.segment_pending}
+        state={'time':time.time(),'status':self.status,'recording':self.d.recording,'busy':self.d.busy,'wake':self.enabled,'awaitingCommand':self.command_session.active(time.monotonic(),self.epoch),'microphone':self.mic_ready,'detectorReady':self.detector_ready,'mode':self.long_mode or self.capture_mode,'level':float(self.d.level),'segmentPending':self.segment_pending}
         state['keyListenerReady']=bool(getattr(self.d,'key_listener_ready',False))
         if not state['keyListenerReady'] and not self.d.recording and not self.d.busy:
             state['status']='Fn unavailable — enable OpenToolkit Speech in System Settings → Privacy & Security → Accessibility'
@@ -271,6 +276,14 @@ class VoiceControl:
             self.delivery_status('Enable meeting capture in Settings before using this command.',True);return
         if action in ('note','reminder') and not self.config.get('organizerEnabled',True):
             self.delivery_status('Enable Notes in Settings before using this command.',True);return
+        if action=='ai_probe':
+            def probe():
+                from local_writing import available_models, WritingUnavailable
+                try:
+                    models=available_models(self.config.get('aiWritingEndpoint') or 'http://127.0.0.1:1234/v1')
+                    self.emit('ai_models',models=models,message='Choose a loaded local text model.' if models else 'No local text model is loaded.')
+                except WritingUnavailable as error:self.emit('ai_models',models=[],message=str(error))
+            self.d.jobs.put((probe,None));return
         if action=='test_sound':
             if not self.d.recording:self.d.preview_feedback(c.get('cue'))
             return
@@ -293,12 +306,13 @@ class VoiceControl:
             if self.long_mode:self.stop_long(discard=True)
             else:self.d.stop(False)
             return
-        if action in ('start','live','note','reminder','practice'):
+        if action in ('start','live','note','reminder','practice','summarize','email'):
             if self.d.recording or self.d.busy or not self.config.get('dictationEnabled',True):return
             if self.long_mode:self.label('Stop continuous capture before starting dictation');return
-            target=focus() if action in ('start','practice') else None
-            self.capture_mode='dictation' if action=='start' else action
-            if action=='start' and target is None:self.capture_mode='live'
+            target=focus() if action in ('start','practice','summarize','email') else None
+            self.capture_mode='dictation' if action in ('start','summarize','email') else action
+            self.writing_override={'summarize':'summary','email':'email_ai'}.get(action)
+            if action in ('start','summarize','email') and target is None:self.capture_mode='live'
             self.send_after=False;self.d.start(voice=True,target=target)
             self.emit('capture_started',mode=self.capture_mode)
     def pause_for_lock(self):
@@ -309,7 +323,7 @@ class VoiceControl:
             if self.d.recording:
                 self.d.chunks.append(samples);self.d.audio_frames+=len(samples);self.d.level=rms
                 if self.d.audio_frames>=16000*300:AppHelper.callAfter(self.d.stop)
-                if self.config.get('liveEnabled') and not self.preview_pending and time.monotonic()-self.last_preview>=2.5 and self.d.audio_frames>=16000:
+                if self.config.get('liveEnabled') and getattr(self.d,'session_writing_mode','verbatim') not in ('summary','email_ai') and not self.preview_pending and time.monotonic()-self.last_preview>=2.5 and self.d.audio_frames>=16000:
                     self.preview_pending=True;self.last_preview=time.monotonic()
                     offset=getattr(self.d,'preview_offset',0)
                     audio=np.concatenate(self.d.chunks)[offset:offset+16000*25];epoch=self.epoch
@@ -372,14 +386,29 @@ class VoiceControl:
             epoch,samples=self.queue.get()
             if epoch!=self.epoch or not self.enabled or self.d.busy:continue
             try:
-                commands=command_phrases(self.config)
+                commands=detector_phrases(self.config)
                 if detector is None or detector.commands!=commands:
                     detector=Detector(speech_resources()/MODEL,dict(commands));self.detector_ready=True
                 if epoch!=previous:detector.reset();previous=epoch
                 result=detector.feed(samples)
-                if result:AppHelper.callAfter(self.accept,result,epoch)
+                if result:AppHelper.callAfter(self.heard,result,epoch)
             except Exception:
                 log.exception('keyword detector failed');self.enabled=False;self.detector_ready=False;AppHelper.callAfter(self.label,'Wake detector unavailable — Fn is still available')
+    def heard(self,result,epoch):
+        if epoch!=self.epoch or not self.enabled or self.d.busy:return
+        now=time.monotonic()
+        if result=='wake':
+            if not self.command_session.active(now,epoch):
+                self.command_session.arm(now,epoch)
+                self.d.wake_feedback()
+                self.label('Listening for your command…')
+            return
+        if not self.command_session.consume(now,epoch):return
+        self.d.end_wake_feedback()
+        result={'start_transcribing':'start','screenshot_short':'screenshot'}.get(result,result)
+        self.accept(result,epoch)
+        self.label()
+
     def accept(self,result,epoch):
         if epoch!=self.epoch or not self.enabled or self.d.busy:return
         if self.long_mode:
@@ -394,7 +423,7 @@ class VoiceControl:
             elif result=='cancel':self.d.stop(False)
             elif result=='send' and self.config.get('sendEnabled') and self.capture_mode=='dictation':self.send_after=True;self.d.stop()
         else:
-            if result in ('start','note','reminder','meeting'):self.command(result)
+            if result in ('start','note','reminder','meeting','summarize','email'):self.command(result)
             elif result in ('screenshot','annotate','record','record_stop'):self.emit('action',action=result)
             elif result=='send' and self.config.get('sendEnabled') and self.config.get('standaloneSend'):
                 target=focus();button=send_button(target) if target else None

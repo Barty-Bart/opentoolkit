@@ -10,6 +10,7 @@ struct SpeechState: Decodable {
     var recording = false
     var busy = false
     var wake = false
+    var awaitingCommand: Bool? = nil
     var microphone = false
     var detectorReady = false
     var mode = "dictation"
@@ -26,6 +27,7 @@ struct VoiceEvent: Decodable {
     var message: String?
     var path: String?
     var success: Bool?
+    var models: [String]?
     var empty: Bool?
 }
 @MainActor final class VoiceBridge: ObservableObject {
@@ -37,6 +39,8 @@ struct VoiceEvent: Decodable {
     @Published var practiceResultID = UUID()
     @Published var error = ""
     @Published var connected = false
+    @Published var localWritingModels: [String] = []
+    @Published var localWritingStatus = ""
     var onEvent: ((VoiceEvent)->Void)?
     let root: URL
     private var timer: Timer?
@@ -53,7 +57,7 @@ struct VoiceEvent: Decodable {
         timer=Timer.scheduledTimer(withTimeInterval:0.3,repeats:true) { [weak self] _ in Task { @MainActor in self?.poll() } }
     }
     func persist() {
-        let prefix=(settings.wakePhrase ?? "hey open toolkit").trimmingCharacters(in:.whitespacesAndNewlines)
+        let prefix=(settings.wakePhrase ?? VoiceSettings.defaultWakePhrase).trimmingCharacters(in:.whitespacesAndNewlines)
         for (key,phrase) in settings.phrases where phrase.lowercased().hasPrefix(prefix.lowercased()+" ") {
             settings.phrases[key]=String(phrase.dropFirst(prefix.count+1))
         }
@@ -127,6 +131,7 @@ struct VoiceEvent: Decodable {
             if event.kind=="transcript",event.mode=="practice" {practiceText=event.text ?? "";practiceResultID=UUID()}
             if event.kind=="transcript" {finalText=event.text ?? "";preview=""}
             if event.kind=="capture_started" {preview=""}
+            if event.kind=="ai_models" {localWritingModels=event.models ?? [];localWritingStatus=event.message ?? ""}
             if event.kind=="error" {error=event.message ?? "Speech error"}
             onEvent?(event)
             try? FileManager.default.removeItem(at:url)

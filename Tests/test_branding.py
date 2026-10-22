@@ -19,7 +19,7 @@ class BrandingTests(unittest.TestCase):
              'liveEnabled':True,'recoveryKey':'option','indicatorColor':'blue'}
         original=copy.deepcopy(old)
         updated=migrate_voice_branding(old)
-        self.assertEqual(updated['wakePhrase'],'hey open toolkit')
+        self.assertEqual(updated['wakePhrase'],'hey toolkit')
         self.assertEqual(updated['phrases']['start'],'start dictating')
         self.assertEqual(updated['recoveryKey'],'option')
         self.assertEqual(updated['indicatorColor'],'blue')
@@ -28,8 +28,8 @@ class BrandingTests(unittest.TestCase):
 
     def test_pre_prefix_config_migrates(self):
         old={'phrases':{'start':'hey pico start dictating','note':'take a note'}}
-        self.assertEqual(command_phrases(old)['start'],'hey open toolkit start dictating')
-        self.assertEqual(command_phrases(old)['note'],'hey open toolkit take a note')
+        self.assertEqual(command_phrases(old)['start'],'hey toolkit start dictating')
+        self.assertEqual(command_phrases(old)['note'],'hey toolkit take a note')
 
     def test_custom_wake_and_action_are_preserved(self):
         old={'wakePhrase':'hello pocket','phrases':{'start':'begin writing'}}
@@ -38,7 +38,7 @@ class BrandingTests(unittest.TestCase):
         self.assertEqual(updated['phrases'],old['phrases'])
 
     def test_old_name_can_be_selected_after_migration(self):
-        selected={'brandingVersion':1,'wakePhrase':'hey pico','phrases':{'start':'start dictating'}}
+        selected={'brandingVersion':2,'wakePhrase':'hey pico','phrases':{'start':'start dictating'}}
         self.assertEqual(migrate_voice_branding(selected),selected)
         self.assertEqual(command_phrases(selected)['start'],'hey pico start dictating')
 

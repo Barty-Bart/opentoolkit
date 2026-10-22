@@ -378,6 +378,7 @@ class Indicator:
         self.panel.setContentView_(self.view)
         self.timer = None
         self.ticks = 0
+        self.listening = False
         self.glow = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(NSMakeRect(0,0,100,40),NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel,NSBackingStoreBuffered,False)
         self.glow.setOpaque_(False);self.glow.setBackgroundColor_(NSColor.clearColor());self.glow.setLevel_(NSStatusWindowLevel)
         self.glow.setIgnoresMouseEvents_(True);self.glow.setHidesOnDeactivate_(False)
@@ -434,22 +435,36 @@ class Indicator:
         self.glow.setFrame_display_(NSMakeRect(*frame),True)
         self.glow_view.setNeedsDisplay_(True);self.glow.orderFrontRegardless()
 
+    def show_listening(self):
+        self.listening=True
+        self.view.busy=False
+        self.view.levels=[.15]*BARS
+        self._place()
+        self.panel.orderFrontRegardless()
+        self.glow.orderOut_(None)
+        self._start_timer()
+
     def show_recording(self):
+        self.listening=False
         self.view.busy = False
         self.view.levels = [0.0] * BARS
         self._place()
         if self.dictation.voice_control.config.get("indicatorEnabled",True):self.panel.orderFrontRegardless()
+        else:self.panel.orderOut_(None)
         self._show_glow()
         self._start_timer()
 
     def show_busy(self):
+        self.listening=False
         self.view.busy = True
         self.glow.orderOut_(None)
         self._place()
         if self.dictation.voice_control.config.get("indicatorEnabled",True):self.panel.orderFrontRegardless()
+        else:self.panel.orderOut_(None)
         self._start_timer()
 
     def hide(self):
+        self.listening=False
         if self.timer:
             self.timer.invalidate()
             self.timer = None
@@ -464,11 +479,11 @@ class Indicator:
         v = self.view
         self.ticks+=1
         if self.ticks%6==0:self._place()
-        if self.ticks%15==0 and not v.busy:self._show_glow()
+        if self.ticks%15==0 and not v.busy and not self.listening:self._show_glow()
         if v.busy:
             v.phase += 0.25
         else:
-            lv = min(1.0, self.dictation.level * 18)
+            lv = max(.15 if self.listening else 0, min(1.0, self.dictation.level * 18))
             v.levels = v.levels[1:] + [lv]
         v.setNeedsDisplay_(True)
 
@@ -476,12 +491,22 @@ class Indicator:
 # --- recording + hotkey ---------------------------------------------------
 
 class Dictation:
+    def wake_feedback(self):
+        config=self.voice_control.config
+        self.cue_sound=feedback_sound(config.get('wakeSound') or 'Tink',config.get('soundVolume') if config.get('soundVolume') is not None else .25)
+        self.indicator.show_listening()
+
+    def end_wake_feedback(self):
+        if self.recording:self.indicator.show_recording()
+        elif self.busy:self.indicator.show_busy()
+        else:self.indicator.hide()
+
     def preview_feedback(self,cue):
-        if cue not in ('startSound','endSound','talkingSound'):return
+        if cue not in ('startSound','endSound','talkingSound','wakeSound'):return
         sound=getattr(self,'preview_sound',None)
         if sound:sound.stop()
         config=self.voice_control.config
-        defaults={'startSound':'Tink','endSound':'Pop','talkingSound':'off'}
+        defaults={'startSound':'Tink','endSound':'Pop','talkingSound':'off','wakeSound':'Tink'}
         self.preview_sound=feedback_sound(config.get(cue) or defaults[cue],config.get('soundVolume',.25),loop=False)
 
     def __init__(self, db):
@@ -523,6 +548,8 @@ class Dictation:
         if not voice:
             self.voice_control.capture_mode="dictation"
             self.voice_control.send_after=False
+            self.voice_control.writing_override=None
+        self.session_writing_mode=getattr(self.voice_control,"writing_override",None) or self.voice_control.config.get("writingMode","verbatim")
         with self.audio_lock:
             self.chunks = []
             self.audio_frames = 0
@@ -536,7 +563,7 @@ class Dictation:
             self.preview_offset = 0
             self.live_prefix = ''
             from voice_control import LiveInsertion
-            self.live_insertion = LiveInsertion(self.target, paste, self.voice_control.delivery_status) if self.voice_control.config.get('liveEnabled') and self.voice_control.capture_mode=='dictation' else None
+            self.live_insertion = LiveInsertion(self.target, paste, self.voice_control.delivery_status) if self.voice_control.config.get('liveEnabled') and self.voice_control.capture_mode=='dictation' and self.session_writing_mode not in ('summary','email_ai') else None
         if self.live_insertion is not None and not self.live_insertion.valid:
             self.live_insertion=None
             self.voice_control.delivery_status('This field does not support live typing. Final text will be pasted when you stop.',True)
@@ -557,7 +584,7 @@ class Dictation:
             self.hands_free = False
             audio = np.concatenate(self.chunks) if self.chunks else np.zeros(0, dtype=np.float32)
             self.chunks = []
-            context = {'app': self.app, 'voice': self.voice_session, 'target': self.target, 'mode':self.voice_control.capture_mode, 'send':self.voice_control.send_after, 'live':getattr(self,'live_insertion',None), 'input_revision':getattr(self,'delivery_revision',0)}
+            context = {'app': self.app, 'voice': self.voice_session, 'target': self.target, 'mode':self.voice_control.capture_mode, 'send':self.voice_control.send_after, 'live':getattr(self,'live_insertion',None), 'input_revision':getattr(self,'delivery_revision',0),'writing_mode':getattr(self,'session_writing_mode','verbatim'),'writing_config':dict(self.voice_control.config)}
             self.voice_control.send_after=False
             self.voice_session = False
             self.target = None
@@ -684,8 +711,19 @@ class Dictation:
         if context['voice'] or context.get('send'):
             text = self.voice_control.strip_command(text)
         from text_formatting import format_text
-        writing_mode=self.voice_control.config.get('writingMode','verbatim') if context['mode'] in ('dictation','practice') else 'verbatim'
+        writing_mode=context.get('writing_mode') or (self.voice_control.config.get('writingMode','verbatim') if context['mode'] in ('dictation','practice') else 'verbatim')
         text=format_text(text,self.voice_control.config.get('spokenFormatting',False),writing_mode,self.voice_control.config.get('messageSentences',2))
+        if writing_mode in ('summary','email_ai'):
+            from local_writing import rewrite, WritingUnavailable
+            AppHelper.callAfter(self.voice_control.label,'Summarizing locally…' if writing_mode=='summary' else 'Drafting your email locally…')
+            try:
+                text=rewrite(text,writing_mode,context.get('writing_config',self.voice_control.config))
+            except WritingUnavailable as error:
+                self.recovery_error='Original transcript saved. '+str(error)
+                context['send']=False
+                AppHelper.callAfter(self.voice_control.delivery_status,self.recovery_error,True)
+                writing_mode='verbatim'
+
         ms = int((time.time() - t) * 1000)
         secs = len(audio) / SAMPLE_RATE
         log.info("%.1fs audio -> %d ms, %d chars", secs, ms, len(text))

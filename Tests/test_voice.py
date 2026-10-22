@@ -198,6 +198,9 @@ class VoiceTests(unittest.TestCase):
         c.events = self.base / "events"; c.events.mkdir()
         c.config_file = self.base / "config.json"
         c.paused_file = self.base / "disabled"
+        from command_session import CommandSession
+        c.command_session=CommandSession()
+        c.writing_override=None
         c.config = copy.deepcopy(v.DEFAULTS)
         c._config_stamp = 0
         c.enabled = True; c.epoch = 4; c.mic_ready = False; c.detector_ready = False
@@ -208,7 +211,7 @@ class VoiceTests(unittest.TestCase):
         c.segment = []; c.segment_frames = 0; c.silent = 0; c.segment_pending = 0
         c.d = types.SimpleNamespace(jobs=queue.Queue(), transcriber=Mock(), audio_lock=threading.RLock(),
                                    recording=False, busy=False, chunks=[], audio_frames=0, level=0.,
-                                   start=Mock(), stop=Mock(), preview=Mock())
+                                   start=Mock(), stop=Mock(), preview=Mock(), wake_feedback=Mock(), end_wake_feedback=Mock())
         c.d.transcriber.name = "synthetic-test-model"
         c.db = Mock(); c.paste = Mock()
         self.emissions = []
@@ -221,21 +224,21 @@ class VoiceTests(unittest.TestCase):
             self.assertFalse(v.DEFAULTS[field])
 
     def test_custom_phrase_normalises_and_rejects_keyword_syntax(self):
-        self.assertEqual(w.validate_phrase("  Hey   OpenToolkit start dictating "), "Hey OpenToolkit start dictating")
+        self.assertEqual(w.validate_phrase("  Hey   Toolkit start dictating "), "Hey Toolkit start dictating")
         for bad in ("", "a/b", "start @send", "☀️", "one two three four five six seven eight nine"):
             with self.subTest(bad=bad), self.assertRaises(ValueError): w.validate_phrase(bad)
 
     def test_strip_only_trailing_custom_commands(self):
         self.c.config["phrases"]["stop"] = "please stop now"
-        self.assertEqual(self.c.strip_command("Hello there. Hey OpenToolkit, please, stop now!"), "Hello there")
+        self.assertEqual(self.c.strip_command("Hello there. Hey Toolkit, please, stop now!"), "Hello there")
         self.assertEqual(self.c.strip_command("Please stop now is a phrase."), "Please stop now is a phrase.")
-        self.assertEqual(self.c.strip_command("Hello there. Hey OpenToolkit, finish and send."), "Hello there")
+        self.assertEqual(self.c.strip_command("Hello there. Hey Toolkit, finish and send."), "Hello there")
 
     def test_shared_prefix_applies_to_every_action_and_can_change(self):
         commands=w.command_phrases(self.c.config)
-        self.assertEqual(commands['start'],'hey open toolkit start dictating')
-        self.assertEqual(commands['meeting'],'hey open toolkit transcribe a meeting')
-        self.assertTrue(all(p.startswith('hey open toolkit ') for p in commands.values()))
+        self.assertEqual(commands['start'],'hey toolkit start dictating')
+        self.assertEqual(commands['meeting'],'hey toolkit transcribe a meeting')
+        self.assertTrue(all(p.startswith('hey toolkit ') for p in commands.values()))
         self.c.config['wakePhrase']='hello pocket'
         commands=w.command_phrases(self.c.config)
         self.assertEqual(commands['note'],'hello pocket take a note')
@@ -244,8 +247,8 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(self.c.strip_command('Keep this. Stop transcribing.'),'Keep this. Stop transcribing.')
 
     def test_legacy_start_prefix_is_not_duplicated(self):
-        self.c.config['phrases']['start']='hey open toolkit start dictating'
-        self.assertEqual(w.command_phrases(self.c.config)['start'],'hey open toolkit start dictating')
+        self.c.config['phrases']['start']='hey toolkit start dictating'
+        self.assertEqual(w.command_phrases(self.c.config)['start'],'hey toolkit start dictating')
 
     def test_disabled_notes_and_meeting_explain_the_missing_module(self):
         for action,field in [('note','organizerEnabled'),('reminder','organizerEnabled'),('meeting','continuousEnabled')]:
@@ -641,7 +644,7 @@ class VoiceTests(unittest.TestCase):
     def test_fn_send_strips_command_and_preserves_target(self):
         cls, env = dictation_class()
         d = cls.__new__(cls); d.voice_control = self.c; d.transcriber = Mock()
-        d.transcriber.name = "fake"; d.transcriber.transcribe.return_value = "Hello there. Hey OpenToolkit, finish and send."
+        d.transcriber.name = "fake"; d.transcriber.transcribe.return_value = "Hello there. Hey Toolkit, finish and send."
         d.db = Mock(); self.c.send_when_pasted = Mock()
         target = (100, "field", "Test", "com.openai.codex")
         with patch.object(v, "same_focus", return_value=True):
@@ -702,6 +705,49 @@ class VoiceTests(unittest.TestCase):
         with patch.object(v,"same_focus",return_value=True):
             d._transcribe_and_paste(np.zeros(16000), {"app": "Test", "voice": False, "mode": "dictation", "target":(1,"field")})
         self.assertEqual(order, ["commit", "event", "paste"])
+
+    def test_ai_summary_saves_original_and_draft_before_delivery(self):
+        cls,env=dictation_class();d=cls.__new__(cls);d.voice_control=self.c
+        d.transcriber=Mock();d.transcriber.name='synthetic';d.transcriber.transcribe.return_value='Ship tomorrow. Tomorrow is our plan.'
+        d.db=sqlite3.connect(':memory:')
+        d.db.execute('create table dictations(text,app,audio_seconds,transcribe_ms,model,original_text,writing_mode)')
+        self.addCleanup(d.db.close)
+        def assert_saved(text):
+            self.assertEqual(d.db.execute('select text,original_text,writing_mode from dictations').fetchone(),('• Ship tomorrow.','Ship tomorrow. Tomorrow is our plan.','summary'))
+        env['paste'].side_effect=assert_saved
+        with patch('local_writing.rewrite',return_value='• Ship tomorrow.') as rewrite,patch.object(v,'same_focus',return_value=True),patch.object(v,'focus',return_value=None):
+            d._transcribe_and_paste(np.zeros(16000),{'app':'Test','voice':False,'mode':'dictation','target':(1,'field'),'writing_mode':'summary','writing_config':{'aiWritingModel':'synthetic'}})
+        rewrite.assert_called_once_with('Ship tomorrow. Tomorrow is our plan.','summary',{'aiWritingModel':'synthetic'})
+        env['paste'].assert_called_once_with('• Ship tomorrow.')
+
+    def test_ai_capture_does_not_queue_live_inference(self):
+        self.c.config['liveEnabled']=True;self.c.d.recording=True
+        self.c.d.session_writing_mode='summary';self.c.d.preview_offset=0
+        self.c._audio(np.ones((16000,1),dtype=np.float32)*0.01,16000,None,None)
+        self.assertTrue(self.c.d.jobs.empty())
+        self.assertEqual(self.c.d.audio_frames,16000)
+
+    def test_ai_failure_keeps_original_and_never_sends(self):
+        from local_writing import WritingUnavailable
+        cls,env=dictation_class();d=cls.__new__(cls);d.voice_control=self.c
+        d.transcriber=Mock();d.transcriber.name='synthetic';d.transcriber.transcribe.return_value='The original is recoverable.'
+        d.db=Mock();self.c.send_when_pasted=Mock()
+        context={'app':'Test','voice':False,'mode':'dictation','target':(1,'field'),'send':True,'writing_mode':'email_ai'}
+        with patch('local_writing.rewrite',side_effect=WritingUnavailable('Local model unavailable')),patch.object(v,'same_focus',return_value=True),patch.object(v,'focus',return_value=None):
+            d._transcribe_and_paste(np.zeros(16000),context)
+        self.assertFalse(context['send']);self.c.send_when_pasted.assert_not_called()
+        env['paste'].assert_called_once_with('The original is recoverable.')
+        self.assertEqual(d.db.execute.call_args.args[1][-2:],('The original is recoverable.','verbatim'))
+        d.db.commit.assert_called_once()
+
+    def test_typing_during_ai_work_prevents_insertion(self):
+        cls,env=dictation_class();d=cls.__new__(cls);d.voice_control=self.c
+        d.transcriber=Mock();d.transcriber.name='synthetic';d.transcriber.transcribe.return_value='A thought.'
+        d.db=Mock();d.input_revision=2
+        def changed(*args):d.input_revision=3;return '• A thought.'
+        with patch('local_writing.rewrite',side_effect=changed),patch.object(v,'same_focus',return_value=True):
+            d._transcribe_and_paste(np.zeros(16000),{'app':'Test','voice':False,'mode':'dictation','target':(1,'field'),'writing_mode':'summary','input_revision':2})
+        d.db.commit.assert_called_once();env['paste'].assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

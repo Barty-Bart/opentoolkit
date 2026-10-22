@@ -1,10 +1,14 @@
 import Foundation
 
 struct VoiceSettings: Codable {
-    static let defaultWakePhrase = "hey open toolkit"
-    var brandingVersion: Int? = 1
+    static let defaultWakePhrase = "hey toolkit"
+    var brandingVersion: Int? = 2
     var wakePhrase: String? = VoiceSettings.defaultWakePhrase
     var writingMode: String? = nil
+    var aiWritingEnabled: Bool? = nil
+    var aiWritingEndpoint: String? = nil
+    var aiWritingModel: String? = nil
+    var wakeSound: String? = nil
     var messageSentences: Int? = nil
     var speechEngine: String? = nil
     var whisperModel: String? = nil
@@ -30,21 +34,24 @@ struct VoiceSettings: Codable {
     var standaloneSend = false
     var organizerEnabled = false
     var continuousEnabled = false
-    var phrases: [String:String] = ["start":"start dictating", "stop":"stop transcribing", "cancel":"cancel dictation", "send":"finish and send", "screenshot":"take a screenshot", "annotate":"draw on screen", "record":"record my screen", "record_stop":"stop screen recording", "note":"take a note", "reminder":"make a reminder", "meeting":"transcribe a meeting"]
+    var phrases: [String:String] = ["start":"start dictating", "stop":"stop transcribing", "cancel":"cancel dictation", "send":"finish and send", "screenshot":"take a screenshot", "annotate":"draw on screen", "record":"record my screen", "record_stop":"stop screen recording", "note":"take a note", "reminder":"make a reminder", "meeting":"transcribe a meeting", "summarize":"summarize into bullet points", "email":"turn this into an email"]
     /// Migrate the former default once, without replacing custom wake phrases.
     @discardableResult mutating func migrateBranding() -> Bool {
-        guard (brandingVersion ?? 0) < 1 else { return false }
+        let version = brandingVersion ?? 0
+        guard version < 2 else { return false }
         let old = (wakePhrase ?? "hey pico").split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased()
-        if old == "hey pico" {
+        if (version == 0 && old == "hey pico") || old == "hey open toolkit" {
             wakePhrase = Self.defaultWakePhrase
             for (key, value) in phrases {
                 let normalized = value.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-                if normalized.lowercased().hasPrefix("hey pico ") {
-                    phrases[key] = String(normalized.dropFirst("hey pico ".count))
+                if normalized.lowercased().hasPrefix(old + " ") {
+                    phrases[key] = String(normalized.dropFirst(old.count + 1))
                 }
             }
         }
-        brandingVersion = 1
+        phrases["summarize"] = phrases["summarize"] ?? "summarize into bullet points"
+        phrases["email"] = phrases["email"] ?? "turn this into an email"
+        brandingVersion = 2
         return true
     }
 }

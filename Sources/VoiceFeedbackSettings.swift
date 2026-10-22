@@ -38,6 +38,10 @@ struct VoiceFeedbackSettings:View {
             Picker("Glow colour",selection:string(\.glowColor,"cyan")){Text("Cyan").tag("cyan");Text("Blue").tag("blue");Text("Purple").tag("purple");Text("Green").tag("green")}
             Text("Glow works where macOS exposes the text box bounds. The waveform stays available in other apps.").font(.caption).foregroundStyle(.secondary)
             HStack{Picker("Start sound",selection:string(\.startSound,"Tink")){ForEach(availableSounds,id:\.self){Text($0=="none" ? "None":$0).tag($0)}};Picker("End sound",selection:string(\.endSound,"Pop")){ForEach(availableSounds,id:\.self){Text($0=="none" ? "None":$0).tag($0)}}}
+            HStack {
+                Picker("Wake confirmation",selection:string(\.wakeSound,"Tink")){ForEach(availableSounds,id:\.self){Text($0=="none" ? "None":$0).tag($0)}}
+                Button("Hear wake cue"){voice.command("test_sound",extra:["cue":"wakeSound"])}.disabled(voice.state.recording)
+            }
             Picker("Sound while dictating",selection:string(\.talkingSound,"off")){Text("Off").tag("off");Text("Quiet UFO hum").tag("UFO");ForEach(customSounds,id:\.self){Text($0.replacingOccurrences(of:"custom:",with:"")).tag($0)}}
             Button("Import sound…"){importSound()}
             if !soundError.isEmpty {Text(soundError).font(.caption).foregroundStyle(.secondary)}

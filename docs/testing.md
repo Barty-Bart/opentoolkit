@@ -11,7 +11,7 @@ Validation performed on an Apple Silicon Mac running macOS 26.5.1. Test data was
 - The bundled helper passed SQLite, audio codec and durable-recovery checks offline, with no speech model or microphone opened.
 - Developer ID signatures, hardened runtime and timestamps verified for the native app and bundled helper. The DMG signature and integrity verified. A mounted copy matched the packaged-file manifest, passed storage checks and retained a valid signature.
 - All bundled Mach-O deployment targets are at or below macOS 14. That does not establish compatibility on an older OS.
-- Apple notarization is pending for this candidate. Signing and notarization are separate steps.
+- Apple accepted the repaired candidate with no reported issues. Its DMG ticket was stapled and validated, Gatekeeper accepted the DMG and enclosed app as Notarized Developer ID, and all 3,918 packaged files still matched the reviewed manifest. This covers the repaired candidate, not subsequent source changes.
 
 ## Earlier component checks
 
@@ -46,6 +46,17 @@ The native library/organizer harnesses compile with `Sources/LibraryDatabase.swi
 - End-to-end onboarding permission attribution for the new OpenToolkit speech helper; the original app's permissions do not transfer automatically.
 - Visual acceptance of the new Setup controls: the native UI inspection connection failed. The app launched, but this was not a successful visual check.
 - Every application's editable text field, Send button, caret and drag/drop handling. Accessibility support varies.
-- Apple notarization of the current candidate, Intel Macs, automatic updates, and full fresh-device acceptance of the packaged app.
+- Notarization of subsequent development builds, Intel Macs, automatic updates, and full fresh-device acceptance of the packaged app.
 
-This is a current-development snapshot, not a claim that every idea on the roadmap is finished. Deferred: LLM bullet summaries, semantic Notes search, cloud sync and a camera overlay.
+This is a current-development snapshot, not a claim that every idea on the roadmap is finished. Deferred: semantic Notes search, cloud sync and a camera overlay. The new local AI writing integration needs real-model and microphone acceptance testing.
+
+## New editor and command flow (development, not installed)
+
+- 166 Python tests passed with temporary data. Added wake-window expiry/epoch/single-use routing, localhost-only AI HTTP, refusal of remote URLs/redirects, original/draft persistence, failure cancelling Send, and typing during inference cancelling automatic paste. AI capture does not queue live-preview inference.
+- 12 native settings checks passed. Existing custom prefixes, action phrases, and recovery settings survive migration to the new default.
+- 28 synthetic speech cases passed through the actual CPU detector: all 16 keyword labels, four wake-plus-command sequences with a pause, five non-wake conversational phrases, and three bare action phrases. Bare actions are detected acoustically but cannot execute without the separately tested wake window. Continuous “Hey Toolkit start transcribing” without a pause was not reliable; wait for the cue. This test is one synthetic voice, not real-speaker/noise acceptance.
+- 16 native renderer checks passed: output dimensions at multiple zoom levels, opaque redaction, transparent highlight, fill color, crop/undo/redo, horizontal/vertical combination, and dirty-state reset after saving.
+- Isolated native editor UI: arrow drawing and movement, text insertion, crop application and undo, compact layout after status changes, Save as, and Done were exercised with synthetic images. Save as and Done produced matching edited PNG bytes. The drag handle exported an original-resolution PNG with private file permissions; drops into every external app have not been validated.
+- The local AI integration was tested against a synthetic HTTP server. Actual LM Studio model quality, latency, memory use, and microphone-to-final-draft operation remain unverified. No live GPU model, user recordings, production app, or user database was used for this development test run.
+
+Keyword tuning follows the [sherpa-onnx keyword-file documentation](https://k2-fsa.github.io/sherpa/onnx/kws/index.html). The detector preserves buffered audio between the wake phrase and action, and initializes fresh streams with silence context.
