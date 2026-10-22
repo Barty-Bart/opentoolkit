@@ -315,7 +315,7 @@ final class OrganizerStore: ObservableObject {
     func showWindow(tab: OrganizerSection = .notes) {
         if notesWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 940, height: 640), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-            window.title = "Pico · Organizer"
+            window.title = "OpenToolkit · Organizer"
             window.minSize = NSSize(width: 680, height: 480)
             window.isReleasedWhenClosed = false
             window.center()

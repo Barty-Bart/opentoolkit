@@ -1,6 +1,6 @@
 """No-microphone speech integration tests, using synthetic fixtures and mocked delivery.
 
-Run with a test venv containing Pico's dependencies. These tests never open audio input, transcribe user
+Run with a test venv containing OpenToolkit's dependencies. These tests never open audio input, transcribe user
 recordings, manipulate the clipboard, or press a real Send button.
 """
 import ast
@@ -35,6 +35,9 @@ def dictation_class():
                START_SOUND="start", STOP_SOUND="stop", play=Mock(), frontmost_app=Mock(return_value="Test"),
                apply_replacements=lambda text: text, AXIsProcessTrustedWithOptions=Mock(return_value=True), paste=Mock())
     exec(compile(ast.Module(body=[cls], type_ignores=[]), "dictate.py isolated class", "exec"), env)
+    directory = tempfile.TemporaryDirectory(prefix="opentoolkit-voice-test-")
+    env["_recovery_directory"] = directory
+    env["Dictation"].recovery_directory = directory.name
     return env["Dictation"], env
 
 
@@ -218,15 +221,50 @@ class VoiceTests(unittest.TestCase):
             self.assertFalse(v.DEFAULTS[field])
 
     def test_custom_phrase_normalises_and_rejects_keyword_syntax(self):
-        self.assertEqual(w.validate_phrase("  Hey   Pico start dictating "), "Hey Pico start dictating")
+        self.assertEqual(w.validate_phrase("  Hey   OpenToolkit start dictating "), "Hey OpenToolkit start dictating")
         for bad in ("", "a/b", "start @send", "☀️", "one two three four five six seven eight nine"):
             with self.subTest(bad=bad), self.assertRaises(ValueError): w.validate_phrase(bad)
 
     def test_strip_only_trailing_custom_commands(self):
         self.c.config["phrases"]["stop"] = "please stop now"
-        self.assertEqual(self.c.strip_command("Hello there. Please, stop now!"), "Hello there")
+        self.assertEqual(self.c.strip_command("Hello there. Hey OpenToolkit, please, stop now!"), "Hello there")
         self.assertEqual(self.c.strip_command("Please stop now is a phrase."), "Please stop now is a phrase.")
-        self.assertEqual(self.c.strip_command("Hello there. Finish and send."), "Hello there")
+        self.assertEqual(self.c.strip_command("Hello there. Hey OpenToolkit, finish and send."), "Hello there")
+
+    def test_shared_prefix_applies_to_every_action_and_can_change(self):
+        commands=w.command_phrases(self.c.config)
+        self.assertEqual(commands['start'],'hey open toolkit start dictating')
+        self.assertEqual(commands['meeting'],'hey open toolkit transcribe a meeting')
+        self.assertTrue(all(p.startswith('hey open toolkit ') for p in commands.values()))
+        self.c.config['wakePhrase']='hello pocket'
+        commands=w.command_phrases(self.c.config)
+        self.assertEqual(commands['note'],'hello pocket take a note')
+        self.assertEqual(commands['stop'],'hello pocket stop transcribing')
+        self.assertEqual(self.c.strip_command('Keep this. Hello Pocket, stop transcribing.'),'Keep this')
+        self.assertEqual(self.c.strip_command('Keep this. Stop transcribing.'),'Keep this. Stop transcribing.')
+
+    def test_legacy_start_prefix_is_not_duplicated(self):
+        self.c.config['phrases']['start']='hey open toolkit start dictating'
+        self.assertEqual(w.command_phrases(self.c.config)['start'],'hey open toolkit start dictating')
+
+    def test_disabled_notes_and_meeting_explain_the_missing_module(self):
+        for action,field in [('note','organizerEnabled'),('reminder','organizerEnabled'),('meeting','continuousEnabled')]:
+            self.c.config[field]=False
+            self.c.command(action)
+            self.assertIn('Enable',self.c.status)
+        self.c.d.start.assert_not_called()
+
+    def test_actions_route_into_note_reminder_and_meeting(self):
+        self.c.config['organizerEnabled']=True;self.c.config['continuousEnabled']=True
+        for action in ('note','reminder'):
+            self.c.last_command=0;self.c.accept(action,self.c.epoch)
+            self.assertEqual(self.c.capture_mode,action)
+            self.c.d.start.assert_called_with(voice=True,target=None)
+        self.c.last_command=0;self.c.accept('meeting',self.c.epoch)
+        self.assertEqual(self.c.long_mode,'meeting')
+        self.assertIn(('session_started',{'mode':'meeting','session':self.c.session}),self.emissions)
+        self.c.accept('stop',self.c.epoch)
+        self.assertIsNone(self.c.long_mode)
 
     def test_stale_or_paused_detection_cannot_start_or_send(self):
         with patch.object(v, "AXUIElementPerformAction") as perform:
@@ -378,6 +416,7 @@ class VoiceTests(unittest.TestCase):
         self.c.paste.assert_not_called()
 
     def test_start_while_busy_does_not_mutate_current_capture(self):
+        self.c.config["organizerEnabled"] = True
         self.c.d.busy = True
         self.c.capture_mode = "dictation"
         self.c.command("note")
@@ -602,7 +641,7 @@ class VoiceTests(unittest.TestCase):
     def test_fn_send_strips_command_and_preserves_target(self):
         cls, env = dictation_class()
         d = cls.__new__(cls); d.voice_control = self.c; d.transcriber = Mock()
-        d.transcriber.name = "fake"; d.transcriber.transcribe.return_value = "Hello there. Finish and send."
+        d.transcriber.name = "fake"; d.transcriber.transcribe.return_value = "Hello there. Hey OpenToolkit, finish and send."
         d.db = Mock(); self.c.send_when_pasted = Mock()
         target = (100, "field", "Test", "com.openai.codex")
         with patch.object(v, "same_focus", return_value=True):

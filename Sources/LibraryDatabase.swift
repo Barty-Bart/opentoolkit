@@ -17,8 +17,8 @@ final class LibraryDatabase {
         try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path)
         try execute("PRAGMA journal_mode=WAL")
         let resource=schema ?? Bundle.main.resourceURL!.appendingPathComponent("Voice/library_schema.sql")
-        let fallback=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Voice/library_schema.sql")
-        let sql=try String(contentsOf:FileManager.default.fileExists(atPath:resource.path) ? resource:fallback,encoding:.utf8)
+        // Load the packaged schema; never embed a developer's source path in the app.
+        let sql=try String(contentsOf:resource,encoding:.utf8)
         guard sqlite3_exec(db,sql,nil,nil,nil)==SQLITE_OK else{throw LibraryFailure(message:"Cannot initialize the library schema.")}
     }
     deinit{sqlite3_close(db)}

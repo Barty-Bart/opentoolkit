@@ -83,7 +83,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var optionsPanel:NSPanel?
     func captureFullScreen(){
         guard !captureInFlight else{return}
-        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {report("Enable Screen Recording permission for Pico.");return}
+        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {report("Enable Screen Recording permission for OpenToolkit.");return}
         guard let screen=NSScreen.screens.first(where:{NSMouseInRect(NSEvent.mouseLocation,$0.frame,false)}) ?? NSScreen.main else{return}
         cancel();finishSelection(screen.frame)
     }
@@ -100,7 +100,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     func captureRegion(fixedSize: CGSize? = nil) {
         guard !captureInFlight else { report("Finishing the previous capture…"); return }
         guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
-            report("Allow Pico in System Settings → Privacy & Security → Screen Recording, then try again.")
+            report("Allow OpenToolkit in System Settings → Privacy & Security → Screen Recording, then try again.")
             return
         }
         cancel()
@@ -881,7 +881,7 @@ private final class CaptureEditorController: NSWindowController, NSWindowDelegat
         self.item = item
         surface = DrawingSurface(frame: CGRect(x: 0, y: 0, width: 1000, height: 680), image: image)
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1040, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "Annotate screenshot — Pico"
+        window.title = "Annotate screenshot — OpenToolkit"
         window.minSize = CGSize(width: 800, height: 480); window.isReleasedWhenClosed = false; window.center()
         super.init(window: window); window.delegate = self
         toolbarController.surfaces = [surface]; toolbarController.activeSurface = surface

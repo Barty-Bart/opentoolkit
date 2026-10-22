@@ -1,6 +1,19 @@
-# Private preview validation
+# Preview validation
 
-Validation performed on an Apple Silicon Mac running macOS 26.5.1. Test data was synthetic and temporary. No real microphone recording or real Send button was used in these tests.
+Validation performed on an Apple Silicon Mac running macOS 26.5.1. Test data was synthetic and temporary. No real microphone recording or real Send button was used in these tests. These results describe specific checks, not complete application acceptance.
+
+## Repaired DMG candidate
+
+- 151 Python tests passed with isolated test data, including long-audio chunking, recovery on recognition/database failure, shared wake-prefix routing, runtime resource paths and OpenToolkit migration.
+- 12 native settings checks verified the renamed default, preservation of custom wake phrases and settings, and saving/reloading the migration. The app and helper retain their original bundle identifiers and data paths.
+- Synthetic spoken “Hey OpenToolkit” commands passed through the real CPU keyword detector: all 11 actions were detected, and 10 negative phrases produced no activation. This is not a guarantee of recognition for every speaker or noisy room.
+- A real 202.29-second synthetic Parakeet GPU transcription succeeded with the former file/FFmpeg decoder path blocked. Both long and short transcripts committed to a disposable database. This exercised the repaired speech implementation; it was not a fresh-device end-to-end DMG test.
+- The bundled helper passed SQLite, audio codec and durable-recovery checks offline, with no speech model or microphone opened.
+- Developer ID signatures, hardened runtime and timestamps verified for the native app and bundled helper. The DMG signature and integrity verified. A mounted copy matched the packaged-file manifest, passed storage checks and retained a valid signature.
+- All bundled Mach-O deployment targets are at or below macOS 14. That does not establish compatibility on an older OS.
+- Apple notarization is pending for this candidate. Signing and notarization are separate steps.
+
+## Earlier component checks
 
 - 133 Python tests: corrections, cursor geometry, dictation delivery and recovery gestures, local database migration/search, formatting, CPU/GPU selection and fallback, installer platform checks and safe model extraction.
 - 21 native library checks: search, folder preservation, migration, edit/delete indexing, transaction rollback, failed writes and recovery.
@@ -30,9 +43,9 @@ The native library/organizer harnesses compile with `Sources/LibraryDatabase.swi
 
 - A clean second Mac and the minimum macOS 14 release. Screen recording with microphone requires macOS 15+.
 - Real inference for every offered Whisper size, or performance under competing GPU workloads. Recommendations are heuristics.
-- End-to-end onboarding permission attribution for the new Pico speech helper; the original app's permissions do not transfer automatically.
+- End-to-end onboarding permission attribution for the new OpenToolkit speech helper; the original app's permissions do not transfer automatically.
 - Visual acceptance of the new Setup controls: the native UI inspection connection failed. The app launched, but this was not a successful visual check.
 - Every application's editable text field, Send button, caret and drag/drop handling. Accessibility support varies.
-- Notarization, durable signing identity, Intel Macs, automatic updates, and consumer-ready packaging.
+- Apple notarization of the current candidate, Intel Macs, automatic updates, and full fresh-device acceptance of the packaged app.
 
-This is a current-development snapshot, not a claim that every idea on the roadmap is finished. Deferred: LLM bullet summaries, semantic Notes search, cloud sync, a camera overlay, and public release packaging.
+This is a current-development snapshot, not a claim that every idea on the roadmap is finished. Deferred: LLM bullet summaries, semantic Notes search, cloud sync and a camera overlay.

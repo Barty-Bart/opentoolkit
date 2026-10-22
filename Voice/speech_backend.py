@@ -2,7 +2,6 @@
 import gc
 import os
 import sys
-import tempfile
 
 WHISPER_MODELS = {
     'tiny': 'mlx-community/whisper-tiny-mlx',
@@ -49,12 +48,38 @@ class GPUBackend:
         if self.engine == 'whisper':
             return self.module.transcribe(audio, path_or_hf_repo=WHISPER_MODELS[self.whisper], language='en')['text'].strip()
         if len(audio) > 180 * 16000:
-            import soundfile as sf
-            with tempfile.NamedTemporaryFile(suffix='.wav') as file:
-                sf.write(file.name, audio, 16000)
-                return self.model.transcribe(file.name, chunk_duration=120, overlap_duration=15).text.strip()
+            return self._long_parakeet(audio)
         mel = self.logmel(self.mx.array(audio), self.model.preprocessor_config)
         return self.model.generate(mel)[0].text.strip()
+
+    def _long_parakeet(self, audio):
+        """Decode captured samples directly; a downloaded app must not require FFmpeg."""
+        from parakeet_mlx.alignment import (
+            merge_longest_contiguous, merge_longest_common_subsequence,
+            sentences_to_result, tokens_to_sentences,
+        )
+        rate = self.model.preprocessor_config.sample_rate
+        chunk, overlap = 120 * rate, 15 * rate
+        tokens = []
+        for start in range(0, len(audio), chunk - overlap):
+            samples = audio[start:start + chunk]
+            if len(samples) < self.model.preprocessor_config.hop_length:
+                break
+            mel = self.logmel(self.mx.array(samples), self.model.preprocessor_config)
+            result = self.model.generate(mel)[0]
+            for token in result.tokens:
+                token.start += start / rate
+                token.end = token.start + token.duration
+            if not tokens:
+                tokens = result.tokens
+            else:
+                try:
+                    tokens = merge_longest_contiguous(tokens, result.tokens, overlap_duration=15)
+                except RuntimeError:
+                    tokens = merge_longest_common_subsequence(tokens, result.tokens, overlap_duration=15)
+            if start + chunk >= len(audio):
+                break
+        return sentences_to_result(tokens_to_sentences(tokens)).text.strip()
 
     def close(self):
         self.model = None

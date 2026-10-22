@@ -1,36 +1,8 @@
 import Foundation
 import Combine
 
-struct VoiceSettings: Codable {
-    var writingMode: String? = nil
-    var messageSentences: Int? = nil
-    var speechEngine: String? = nil
-    var whisperModel: String? = nil
-    var computeMode: String? = nil
-    var cpuModel: String? = nil
-    var spokenFormatting: Bool? = nil
-    var learnCorrections: Bool? = nil
-    var recoveryKey: String? = nil
-    var startSound: String? = nil
-    var endSound: String? = nil
-    var talkingSound: String? = nil
-    var soundVolume: Double? = nil
-    var indicatorEnabled: Bool? = nil
-    var indicatorPosition: String? = nil
-    var indicatorStyle: String? = nil
-    var indicatorColor: String? = nil
-    var glowEnabled: Bool? = nil
-    var glowColor: String? = nil
-    var dictationEnabled = true
-    var wakeEnabled = false
-    var liveEnabled = false
-    var sendEnabled = false
-    var standaloneSend = false
-    var organizerEnabled = false
-    var continuousEnabled = false
-    var phrases: [String:String] = ["start":"hey pico start dictating", "stop":"stop transcribing", "cancel":"cancel dictation", "send":"finish and send", "screenshot":"take a screenshot", "annotate":"draw on screen", "record":"record my screen", "record_stop":"stop screen recording", "note":"take a note", "reminder":"make a reminder", "meeting":"transcribe the meeting"]
-}
 struct SpeechState: Decodable {
+    var keyListenerReady: Bool? = nil
     var compute: String? = nil
     var fallback: Bool? = nil
     var time: Double = 0
@@ -73,14 +45,22 @@ struct VoiceEvent: Decodable {
         for path in [root,root.appendingPathComponent("inbox"),root.appendingPathComponent("events")] {
             try? FileManager.default.createDirectory(at:path,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
         }
-        if let data=try? Data(contentsOf:root.appendingPathComponent("config.json")), let config=try? JSONDecoder().decode(VoiceSettings.self,from:data) { settings=config }
+        if let data=try? Data(contentsOf:root.appendingPathComponent("config.json")), var config=try? JSONDecoder().decode(VoiceSettings.self,from:data) {
+            let migrated=config.migrateBranding();settings=config
+            if migrated {persist()}
+        }
         else { persist() }
         timer=Timer.scheduledTimer(withTimeInterval:0.3,repeats:true) { [weak self] _ in Task { @MainActor in self?.poll() } }
     }
     func persist() {
-        let values=Array(settings.phrases.values).map{$0.trimmingCharacters(in:.whitespacesAndNewlines)}
+        let prefix=(settings.wakePhrase ?? "hey open toolkit").trimmingCharacters(in:.whitespacesAndNewlines)
+        for (key,phrase) in settings.phrases where phrase.lowercased().hasPrefix(prefix.lowercased()+" ") {
+            settings.phrases[key]=String(phrase.dropFirst(prefix.count+1))
+        }
+        settings.wakePhrase=prefix
+        let values=settings.phrases.values.map{prefix+" "+$0.trimmingCharacters(in:.whitespacesAndNewlines)}
         guard values.allSatisfy({ $0.range(of:"^[A-Za-z]+(?:[' -][A-Za-z]+)*$",options:.regularExpression) != nil && (1...8).contains($0.split(separator:" ").count) && $0.count<=80 }), Set(values.map{$0.lowercased()}).count==values.count else {
-            error="Use a different phrase for each action: 1–8 English words.";return
+            error="Use a wake phrase and distinct actions: 1–8 English words in each complete command.";return
         }
         do { let url=root.appendingPathComponent("config.json");try JSONEncoder().encode(settings).write(to:url,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path);error="" }
         catch { self.error=error.localizedDescription }
@@ -92,7 +72,12 @@ struct VoiceEvent: Decodable {
         let url=root.appendingPathComponent("inbox/\(String(format:"%020.0f",Date().timeIntervalSince1970 * 1_000_000))-\(UUID().uuidString).json")
         do {try JSONSerialization.data(withJSONObject:body).write(to:url,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path)} catch { self.error=error.localizedDescription }
     }
-    var runtimeInstalled:Bool {FileManager.default.isExecutableFile(atPath:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pico/Speech/venv/bin/python").path)}
+    var runtimeInstalled:Bool {
+        let helper=Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/OpenToolkit Speech.app/Contents")
+        let bundled=FileManager.default.fileExists(atPath:helper.appendingPathComponent("Resources/bundled-runtime.json").path)
+            && FileManager.default.isExecutableFile(atPath:helper.appendingPathComponent("MacOS/OpenToolkitSpeech").path)
+        return bundled || FileManager.default.isExecutableFile(atPath:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pico/Speech/venv/bin/python").path)
+    }
     private var service:String {"gui/\(getuid())/local.pico.speech"}
     @discardableResult private func launchctl(_ arguments:[String])->Bool {
         let process=Process();process.executableURL=URL(fileURLWithPath:"/bin/launchctl");process.arguments=arguments
@@ -101,8 +86,8 @@ struct VoiceEvent: Decodable {
     }
     func startSpeech() {
         guard runtimeInstalled else{error="Install the speech runtime using the CLI installer first.";return}
-        let helper=Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/Pico Speech.app/Contents/MacOS/PicoSpeech")
-        guard FileManager.default.isExecutableFile(atPath:helper.path) else{error="Speech helper is missing. Rebuild Pico.";return}
+        let helper=Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/OpenToolkit Speech.app/Contents/MacOS/OpenToolkitSpeech")
+        guard FileManager.default.isExecutableFile(atPath:helper.path) else{error="Speech helper is missing. Rebuild OpenToolkit.";return}
         let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
         let agent=directory.appendingPathComponent("local.pico.speech.plist")
         let log=root.deletingLastPathComponent().appendingPathComponent("speech.log")

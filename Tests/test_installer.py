@@ -34,17 +34,23 @@ class InstallerTests(unittest.TestCase):
     def test_live_speech_blocks_install(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'VoiceBridge').mkdir();(root/'VoiceBridge/state.json').write_text(json.dumps({'time':time.time(),'recording':True}))
-            with self.assertRaises(ValueError):installer.assert_idle(root,root/'Pico.app')
+            with self.assertRaises(ValueError):installer.assert_idle(root,root/'OpenToolkit.app')
     def test_loading_worker_blocks_install(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(installer.subprocess,'run',return_value=Mock(returncode=0,stdout='')):
-            with self.assertRaises(ValueError):installer.assert_idle(Path(tmp),Path(tmp)/'Pico.app')
+            with self.assertRaises(ValueError):installer.assert_idle(Path(tmp),Path(tmp)/'OpenToolkit.app')
+    def test_rename_refuses_to_update_while_older_app_is_running(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);app=root/'Applications/OpenToolkit.app'
+            for executable in (app/'Contents/MacOS/OpenToolkit',app.with_name('Pico.app')/'Contents/MacOS/Pico'):
+                with patch.object(installer.subprocess,'run',side_effect=[Mock(returncode=1),Mock(stdout=str(executable)+'\n')]):
+                    with self.assertRaisesRegex(ValueError,'Quit'):installer.assert_idle(root/'Data',app)
     def test_install_preserves_library_and_backups(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'built';source.mkdir();(source/'binary').write_text('new')
-            app=root/'Applications/Pico.app';app.mkdir(parents=True);(app/'binary').write_text('old')
+            app=root/'Applications/OpenToolkit.app';app.mkdir(parents=True);(app/'binary').write_text('old')
             runtime=root/'Data/Speech';runtime.mkdir(parents=True);(runtime/'dictate.py').write_text('old worker')
             database=root/'Data/library.sqlite';database.write_bytes(b'private-data')
             backup=installer.install_files(source,app,runtime)
-            self.assertEqual(database.read_bytes(),b'private-data');self.assertEqual((backup/'Pico.app/binary').read_text(),'old')
+            self.assertEqual(database.read_bytes(),b'private-data');self.assertEqual((backup/'OpenToolkit.app/binary').read_text(),'old')
             self.assertEqual((backup/'dictate.py').read_text(),'old worker');self.assertEqual((app/'binary').read_text(),'new')
 if __name__=='__main__':unittest.main()

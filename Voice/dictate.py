@@ -5,7 +5,7 @@ Tap Fn: hands-free mode; tap Fn again to stop and paste.
 Fn combined with another key (Fn+arrow, Fn+F1, ...) cancels the recording.
 
 Runs local GPU or CPU speech according to the selected backend. Every dictation is saved
-to the shared Pico library in Application Support.
+to the shared OpenToolkit library in Application Support.
 """
 
 import logging
@@ -60,7 +60,8 @@ LONG_AUDIO_SECONDS = 180  # longer recordings go through Parakeet's chunked path
 START_SOUND = "/System/Library/Sounds/Tink.aiff"
 STOP_SOUND = "/System/Library/Sounds/Pop.aiff"
 
-HOME = Path(__file__).resolve().parent
+from runtime_paths import speech_data
+HOME = speech_data()
 DB_PATH = HOME / "history.sqlite"
 REPLACEMENTS_PATH = HOME / "replacements.txt"
 
@@ -541,6 +542,7 @@ class Dictation:
             self.voice_control.delivery_status('This field does not support live typing. Final text will be pasted when you stop.',True)
         self.voice_control.epoch += 1
         self.voice_control.label()
+        self.recovery_error = None
         self.jobs.put((None, None))
         if self.voice_control.mic_ready:
             self.start_audio_feedback()
@@ -648,7 +650,8 @@ class Dictation:
         try:
             self._transcribe_and_paste(audio, app)
         except Exception:
-            log.exception("Could not finish dictation; use Reset if this persists")
+            log.exception("Could not finish dictation; recording retained for recovery")
+            self.recovery_error = "Dictation failed. Your recording is retained in Pico/Speech/Recovery."
         finally:
             AppHelper.callAfter(self._completed)
 
@@ -657,16 +660,25 @@ class Dictation:
         self.indicator.hide()
         self.voice_control.epoch += 1
         self.voice_control.capture_mode="dictation"
-        self.voice_control.label()
+        self.voice_control.label(getattr(self, "recovery_error", None))
 
     def _transcribe_and_paste(self, audio, context):
         app = context['app']
         t = time.time()
+        from audio_recovery import PendingRecording
+        try:
+            pending = PendingRecording(audio, SAMPLE_RATE, getattr(self, "recovery_directory", None))
+        except Exception:
+            log.exception("Could not preserve recording before transcription")
+            self.recovery_error = "Could not save a recovery recording. Check free disk space and folder permissions."
+            return
         try:
             original_text = self.transcriber.transcribe(audio)
+            pending.save_text(original_text)
             text = apply_replacements(original_text)
         except Exception:
-            log.exception("transcription failed")
+            log.exception("transcription failed; recording retained for recovery")
+            self.recovery_error = "Transcription failed. Your recording is retained in Pico/Speech/Recovery."
             return
         log.info('finish mode=%s send=%s target=%s', context['mode'], bool(context.get('send')), bool(context.get('target')))
         if context['voice'] or context.get('send'):
@@ -678,11 +690,16 @@ class Dictation:
         secs = len(audio) / SAMPLE_RATE
         log.info("%.1fs audio -> %d ms, %d chars", secs, ms, len(text))
         if not text:
+            self.recovery_error = "No text was recognized. Your recording is retained in Pico/Speech/Recovery."
             return
         self.db.execute(
             "insert into dictations (text, app, audio_seconds, transcribe_ms, model,original_text,writing_mode) values (?, ?, ?, ?, ?, ?, ?)",
             (text, app, round(secs, 2), ms, self.transcriber.name,original_text,writing_mode))
         self.db.commit()
+        try:
+            pending.complete()
+        except OSError:
+            log.exception("Transcript saved; could not remove its recovery copy")
         self.voice_control.emit('transcript',text=text,mode=context['mode'],final=True)
         def deliver():
             from voice_control import same_focus
@@ -858,6 +875,7 @@ def main():
     from voice_control import VoiceControl
     dictation.voice_control = VoiceControl(dictation, paste, play, dictation.db)
     taps = []
+    dictation.key_listener_ready = False
     def install_tap():
         if taps: return
         tap = make_tap(dictation)
@@ -868,7 +886,9 @@ def main():
         Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetMain(), source, Quartz.kCFRunLoopCommonModes)
         Quartz.CGEventTapEnable(tap, True)
         taps.extend([tap,source])
-        log.info('key listener enabled: %s',Quartz.CGEventTapIsEnabled(tap))
+        dictation.key_listener_ready = bool(Quartz.CGEventTapIsEnabled(tap))
+        dictation.voice_control.label()
+        log.info('key listener enabled: %s',dictation.key_listener_ready)
     install_tap()
     _tap_retry = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(5,True,lambda timer:install_tap())
     AppHelper.runEventLoop(installInterrupt=True)
@@ -877,7 +897,8 @@ def main():
 if __name__ == "__main__":
     import fcntl
     # Hold this file descriptor for process lifetime; reopening the launcher is harmless.
-    _instance_lock = open(os.path.join(os.path.dirname(__file__), 'dictate.lock'), 'a')
+    HOME.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _instance_lock = open(HOME / 'dictate.lock', 'a')
     try:
         fcntl.flock(_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:

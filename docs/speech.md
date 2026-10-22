@@ -1,6 +1,6 @@
 # Speech runtime
 
-Pico builds its own runtime from open source packages; it does not copy another app's binary or environment.
+OpenToolkit builds its own runtime from open source packages; it does not copy another app's binary or environment.
 
 | Selection | Backend | Models |
 | --- | --- | --- |
