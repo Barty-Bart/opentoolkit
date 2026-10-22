@@ -1,36 +1,63 @@
-# Pico
+# OpenToolkit
 
-A local Mac toolkit for dictation, screenshots, annotation and quick screen recordings. Notes and meeting transcripts are experimental and off by default.
+### Speak it. Capture it. Make it clear.
 
-**Private preview · Apple Silicon · macOS 14 or newer.** Built and tested on macOS 26; the macOS 14 minimum still needs testing on a separate machine. This is a source installation for early testing, not a notarized consumer release.
+Everyday Mac tools in one local app: dictation, screenshots, annotation and quick screen recordings, with optional notes.
 
-## Install from the CLI
+**Apple Silicon · macOS 14+ · Early source preview**
 
-Install Xcode Command Line Tools (`xcode-select --install`) and Python 3.12, then clone this repository and run from its folder:
+| | In the public source preview |
+| --- | --- |
+| 🎙️ **Dictation** | Hold **Fn** to speak into a text box. Choose Parakeet or Whisper, GPU or CPU, live typing, colours and sounds. |
+| 🪄 **Word corrections** | Review suggested replacements after editing your dictation. Save, undo or disable corrections. Detection depends on the text box. |
+| ↩️ **Recover lost text** | **Double-tap Shift** to paste the last saved transcript; triple-tap to open history. Change the recovery key or turn it off. |
+| 📸 **Screenshots** | Capture an area or full screen. Copy, save, dismiss or drag a floating preview into another app. |
+| ✏️ **Edit screenshots** | Crop, draw arrows and shapes, add text, and combine images. |
+| 🖍️ **Screen annotation** | Hold a configurable hotkey to draw over your screen. Release to keep working; clear the marks when finished. |
+| 🎬 **Screen recording** | Capture a region as video or GIF. Capture options also include fixed dimensions and scrolling screenshots. |
+| 📝 **Notes · experimental** | Optional notes, folders, keyword search and meeting transcripts. Off by default; dictation keeps its own history. |
+
+## Development preview
+
+The next update brings the **“Hey Toolkit” → cue → command** flow, a redesigned screenshot editor, and optional local AI writing for bullet summaries and email drafts. These newer changes are **not yet included in the public source snapshot**.
+
+![Development preview of the OpenToolkit screenshot editor using synthetic demonstration artwork](docs/images/screenshot-editor.jpg)
+
+*The new editor in development, shown with demonstration artwork. This is not a screenshot of the current public build.*
+
+## Try the source preview
+
+The project is now **OpenToolkit**. The current public installer still creates the legacy **Pico.app**; the app rename is part of the next code update. There is **no public DMG release yet**.
+
+Install Python 3.12 and Xcode Command Line Tools, clone this repository, then run from its folder:
 
 ```sh
 python3.12 scripts/install.py --check
 python3.12 scripts/install.py
 ```
 
-The installer builds `~/Applications/Pico.app`, with both a Dock icon and menu-bar access. It creates a separate speech environment and downloads dependencies plus the small wake detector. Setup lets you choose tools, a speech model, and GPU / CPU / GPU with CPU fallback. Speech weights download on first use; several GB of disk space and an internet connection are needed for setup. Recognition then runs on your Mac.
+Open `~/Applications/Pico.app`. It has a Dock icon and menu-bar access. Setup creates a separate speech environment, downloads dependencies, and lets you choose a model. Speech weights download on first use; allow several GB of disk space. Recognition then runs on your Mac.
 
-Use `--native-only` to skip speech dependencies, or `--no-open` to install without opening the app. Rerun the installer to update after stopping speech in Setup and quitting Pico. Previous app/code versions are backed up locally. The installer never imports another app's library.
+Stop speech in Setup and quit the app before updating. This source installer uses ad-hoc signing, so macOS can require permissions again after a rebuild. **Do not use this older source installer over a newer signed development installation.** Follow [GitHub Releases](https://github.com/Barty-Bart/opentoolkit/releases) for future packaged builds.
 
-## Use
+## Useful shortcuts
 
-- **Dictation:** hold Fn, or tap Fn to start/stop hands-free dictation. Configure live typing, sounds, indicators, writing modes and correction suggestions in Dictation.
-- **Recover:** double-tap Shift to paste the latest saved transcript; triple-tap for history. Choose another recovery key or turn this off in settings.
-- **Screenshots:** Command–Shift–4 for a freeform region, Command–Shift–3 for full screen, Command–Shift–5 for capture options including fixed dimensions, scrolling captures and video/GIF. All shortcuts are configurable; macOS or other capture tools may already own them.
-- **Preview:** edit, crop, copy, save, dismiss or drag a capture into another app. Temporary captures stay in Pico's local cache until expiry; Save exports a file.
-- **Notes:** optional folders, keyword search, voice notes and meeting/daily sessions in one library. Dictation has its own history. No embeddings or model/account discovery.
+| Action | Default |
+| --- | --- |
+| Dictate | Hold Fn, or tap to toggle |
+| Recover last transcript / open history | Double / triple Shift |
+| Capture area | ⌘ ⇧ 4 |
+| Capture full screen | ⌘ ⇧ 3 |
+| Capture options: dimensions, scrolling, video & GIF | ⌘ ⇧ 5 |
 
-Pico requests permissions for enabled tools. Screen capture uses Screen & System Audio Recording. Speech needs Microphone and Accessibility, and macOS may request Input Monitoring. Local ad-hoc builds can need permission again after updates; a CLI installer does not remove this macOS restriction.
+Shortcuts are configurable. macOS or another capture app may already use the same combination. Optional voice commands use individually configured phrases in this public preview; wake listening and sending are off by default.
 
-## Privacy and preview limits
+## Local by default
 
-Data lives in `~/Library/Application Support/Pico`, outside the checkout. There is no telemetry, sign-in, sync, email watcher or remote transcription. Model downloads contact their hosts. Never commit your library, custom corrections, sounds, captures, credentials or speech environment.
+Speech recognition, history, approved corrections, notes and captures stay on your Mac. No telemetry, account, cloud transcription or profile sync. Setup downloads packages and model weights from their hosts. Runtime data stays outside this repository in the app's local Application Support folder.
 
-English recognition is configured in this preview. Parakeet uses MLX on the GPU; Whisper supports MLX GPU or faster-whisper CPU. Recommendations are hardware heuristics, not performance promises. CPU fallback is optional and cannot recover an OS-killed or hung worker. Exact caret placement and correction detection depend on what the target app exposes through macOS Accessibility.
+This is an early preview. Text insertion, correction detection, caret placement and drag-and-drop support vary by app. English is configured; screen recording with microphone requires macOS 15+. The macOS 14 minimum still needs testing on a separate Mac. Public-preview writing modes format text; its bullet mode splits sentences and **does not summarize**. Notes AI summaries, semantic search, profile sync and camera overlays remain future work.
 
-Writing modes format text; bullet mode splits sentences and **does not summarize**. Notes summaries with an LLM, semantic search, sync, a camera overlay for recordings, notarization and a DMG are future work. Wake phrases and sending are off by default. Review the [test results and limitations](docs/testing.md) before relying on this preview.
+[Speech models and GPU/CPU options](docs/speech.md) · [Tests and limitations](docs/testing.md) · [Report a problem](https://github.com/Barty-Bart/opentoolkit/issues)
+
+Please report bugs with synthetic examples. Keep private transcripts, recordings, screenshots, settings and credentials out of issues and commits.
