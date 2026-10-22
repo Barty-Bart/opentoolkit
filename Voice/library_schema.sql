@@ -1,0 +1,17 @@
+PRAGMA foreign_keys=ON;
+CREATE TABLE IF NOT EXISTS library_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS dictations(id INTEGER PRIMARY KEY,created_at TEXT NOT NULL DEFAULT(datetime('now','localtime')),text TEXT NOT NULL,app TEXT,audio_seconds REAL,transcribe_ms INTEGER,model TEXT,original_text TEXT,writing_mode TEXT DEFAULT 'verbatim',delivery_status TEXT DEFAULT 'saved');
+CREATE TABLE IF NOT EXISTS captures(name TEXT PRIMARY KEY,created REAL NOT NULL,kept INTEGER NOT NULL DEFAULT 0,exported TEXT);
+CREATE TABLE IF NOT EXISTS folders(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY,kind TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL DEFAULT '',created REAL NOT NULL,updated REAL NOT NULL,folder TEXT REFERENCES folders(id) ON DELETE SET NULL,path TEXT,source TEXT NOT NULL DEFAULT 'library');
+CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY,item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,ordinal INTEGER NOT NULL,text TEXT NOT NULL,UNIQUE(item_id,ordinal));
+CREATE VIRTUAL TABLE IF NOT EXISTS chunk_search USING fts5(text,content='chunks',content_rowid='id',tokenize='unicode61');
+CREATE TRIGGER IF NOT EXISTS chunk_insert AFTER INSERT ON chunks BEGIN INSERT INTO chunk_search(rowid,text) VALUES(new.id,new.text); END;
+CREATE TRIGGER IF NOT EXISTS chunk_delete AFTER DELETE ON chunks BEGIN INSERT INTO chunk_search(chunk_search,rowid,text) VALUES('delete',old.id,old.text); END;
+CREATE TRIGGER IF NOT EXISTS chunk_update AFTER UPDATE ON chunks BEGIN INSERT INTO chunk_search(chunk_search,rowid,text) VALUES('delete',old.id,old.text); INSERT INTO chunk_search(rowid,text) VALUES(new.id,new.text); END;
+CREATE TRIGGER IF NOT EXISTS item_index_insert AFTER INSERT ON items BEGIN INSERT INTO chunks(item_id,ordinal,text) VALUES(new.id,0,new.title||char(10)||new.body); END;
+CREATE TRIGGER IF NOT EXISTS item_index_update AFTER UPDATE OF title,body ON items WHEN old.title!=new.title OR old.body!=new.body BEGIN DELETE FROM chunks WHERE item_id=new.id; INSERT INTO chunks(item_id,ordinal,text) VALUES(new.id,0,new.title||char(10)||new.body); END;
+CREATE TRIGGER IF NOT EXISTS dictation_insert AFTER INSERT ON dictations BEGIN INSERT INTO items(id,kind,title,body,created,updated,source) VALUES('dictation:'||new.id,'dictation',new.created_at,new.text,COALESCE(unixepoch(new.created_at,'utc'),unixepoch()),COALESCE(unixepoch(new.created_at,'utc'),unixepoch()),'dictation'); END;
+CREATE TRIGGER IF NOT EXISTS dictation_update AFTER UPDATE OF text ON dictations BEGIN UPDATE items SET body=new.text,updated=unixepoch() WHERE id='dictation:'||new.id; END;
+CREATE TRIGGER IF NOT EXISTS dictation_delete AFTER DELETE ON dictations BEGIN DELETE FROM items WHERE id='dictation:'||old.id; END;
+INSERT OR IGNORE INTO library_meta VALUES('schema_version','1');

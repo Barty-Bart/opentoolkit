@@ -1,0 +1,150 @@
+import Foundation
+import Combine
+
+struct VoiceSettings: Codable {
+    var writingMode: String? = nil
+    var messageSentences: Int? = nil
+    var speechEngine: String? = nil
+    var whisperModel: String? = nil
+    var computeMode: String? = nil
+    var cpuModel: String? = nil
+    var spokenFormatting: Bool? = nil
+    var learnCorrections: Bool? = nil
+    var recoveryKey: String? = nil
+    var startSound: String? = nil
+    var endSound: String? = nil
+    var talkingSound: String? = nil
+    var soundVolume: Double? = nil
+    var indicatorEnabled: Bool? = nil
+    var indicatorPosition: String? = nil
+    var indicatorStyle: String? = nil
+    var indicatorColor: String? = nil
+    var glowEnabled: Bool? = nil
+    var glowColor: String? = nil
+    var dictationEnabled = true
+    var wakeEnabled = false
+    var liveEnabled = false
+    var sendEnabled = false
+    var standaloneSend = false
+    var organizerEnabled = false
+    var continuousEnabled = false
+    var phrases: [String:String] = ["start":"hey pico start dictating", "stop":"stop transcribing", "cancel":"cancel dictation", "send":"finish and send", "screenshot":"take a screenshot", "annotate":"draw on screen", "record":"record my screen", "record_stop":"stop screen recording", "note":"take a note", "reminder":"make a reminder", "meeting":"transcribe the meeting"]
+}
+struct SpeechState: Decodable {
+    var compute: String? = nil
+    var fallback: Bool? = nil
+    var time: Double = 0
+    var status: String = "Connecting to local speech worker…"
+    var recording = false
+    var busy = false
+    var wake = false
+    var microphone = false
+    var detectorReady = false
+    var mode = "dictation"
+    var level: Double = 0
+}
+struct VoiceEvent: Decodable {
+    var id: String
+    var kind: String
+    var time: Double
+    var text: String?
+    var mode: String?
+    var action: String?
+    var session: String?
+    var message: String?
+    var path: String?
+    var success: Bool?
+    var empty: Bool?
+}
+@MainActor final class VoiceBridge: ObservableObject {
+    @Published var settings = VoiceSettings()
+    @Published var state = SpeechState()
+    @Published var preview = ""
+    @Published var finalText = ""
+    @Published var practiceText = ""
+    @Published var practiceResultID = UUID()
+    @Published var error = ""
+    @Published var connected = false
+    var onEvent: ((VoiceEvent)->Void)?
+    let root: URL
+    private var timer: Timer?
+    init(storage: URL) {
+        root=storage.appendingPathComponent("VoiceBridge")
+        for path in [root,root.appendingPathComponent("inbox"),root.appendingPathComponent("events")] {
+            try? FileManager.default.createDirectory(at:path,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        }
+        if let data=try? Data(contentsOf:root.appendingPathComponent("config.json")), let config=try? JSONDecoder().decode(VoiceSettings.self,from:data) { settings=config }
+        else { persist() }
+        timer=Timer.scheduledTimer(withTimeInterval:0.3,repeats:true) { [weak self] _ in Task { @MainActor in self?.poll() } }
+    }
+    func persist() {
+        let values=Array(settings.phrases.values).map{$0.trimmingCharacters(in:.whitespacesAndNewlines)}
+        guard values.allSatisfy({ $0.range(of:"^[A-Za-z]+(?:[' -][A-Za-z]+)*$",options:.regularExpression) != nil && (1...8).contains($0.split(separator:" ").count) && $0.count<=80 }), Set(values.map{$0.lowercased()}).count==values.count else {
+            error="Use a different phrase for each action: 1–8 English words.";return
+        }
+        do { let url=root.appendingPathComponent("config.json");try JSONEncoder().encode(settings).write(to:url,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path);error="" }
+        catch { self.error=error.localizedDescription }
+    }
+    func setWake(_ enabled: Bool) { settings.wakeEnabled=enabled;persist();command(enabled ? "wake_on":"wake_off") }
+    func command(_ action:String,extra:[String:Any] = [:]) {
+        var body:[String:Any] = ["id":UUID().uuidString,"action":action,"time":Date().timeIntervalSince1970]
+        for (key,value) in extra {body[key]=value}
+        let url=root.appendingPathComponent("inbox/\(String(format:"%020.0f",Date().timeIntervalSince1970 * 1_000_000))-\(UUID().uuidString).json")
+        do {try JSONSerialization.data(withJSONObject:body).write(to:url,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path)} catch { self.error=error.localizedDescription }
+    }
+    var runtimeInstalled:Bool {FileManager.default.isExecutableFile(atPath:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pico/Speech/venv/bin/python").path)}
+    private var service:String {"gui/\(getuid())/local.pico.speech"}
+    @discardableResult private func launchctl(_ arguments:[String])->Bool {
+        let process=Process();process.executableURL=URL(fileURLWithPath:"/bin/launchctl");process.arguments=arguments
+        process.standardOutput=FileHandle.nullDevice;process.standardError=FileHandle.nullDevice
+        do{try process.run();process.waitUntilExit();return process.terminationStatus==0}catch{return false}
+    }
+    func startSpeech() {
+        guard runtimeInstalled else{error="Install the speech runtime using the CLI installer first.";return}
+        let helper=Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/Pico Speech.app/Contents/MacOS/PicoSpeech")
+        guard FileManager.default.isExecutableFile(atPath:helper.path) else{error="Speech helper is missing. Rebuild Pico.";return}
+        let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
+        let agent=directory.appendingPathComponent("local.pico.speech.plist")
+        let log=root.deletingLastPathComponent().appendingPathComponent("speech.log")
+        do {
+            try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+            if !FileManager.default.fileExists(atPath:log.path){try Data().write(to:log)}
+            try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:log.path)
+            let values:[String:Any] = ["Label":"local.pico.speech","ProgramArguments":[helper.path],"RunAtLoad":false,"KeepAlive":false,"StandardOutPath":log.path,"StandardErrorPath":log.path,"Umask":63,"EnvironmentVariables":["TOKENIZERS_PARALLELISM":"false"]]
+            try PropertyListSerialization.data(fromPropertyList:values,format:.xml,options:0).write(to:agent,options:.atomic)
+            try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:agent.path)
+            if !launchctl(["print",service]) {_ = launchctl(["bootstrap","gui/\(getuid())",agent.path])}
+            guard launchctl(["kickstart",service]) else{error="Could not start speech. Check the local speech log in Settings.";return}
+            state.status="Starting local speech; first use may download the model…";error=""
+        }catch{self.error=error.localizedDescription}
+    }
+    func stopSpeech() {
+        guard !state.recording && !state.busy && !["ambient","meeting"].contains(state.mode) else{error="Finish the current capture before stopping speech.";return}
+        settings.wakeEnabled=false;persist()
+        _ = launchctl(["bootout",service]);connected=false;state.status="Speech stopped"
+    }
+    func reset() {
+        guard !state.recording && !state.busy && !["ambient","meeting"].contains(state.mode) else{error="Finish the current capture before resetting speech.";return}
+        settings.wakeEnabled=false;persist()
+        let marker=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pico/Speech/voice-commands.disabled")
+        try? Data().write(to:marker)
+        if launchctl(["print",service]) {_ = launchctl(["kickstart","-k",service]);state.status="Restarting speech…"}else{startSpeech()}
+    }
+    private func poll() {
+        if let data=try? Data(contentsOf:root.appendingPathComponent("state.json")),let state=try? JSONDecoder().decode(SpeechState.self,from:data) {
+            self.state=state; connected=Date().timeIntervalSince1970-state.time<5
+        } else {connected=false}
+        guard let files=try? FileManager.default.contentsOfDirectory(at:root.appendingPathComponent("events"),includingPropertiesForKeys:nil) else{return}
+        for url in files.filter({$0.pathExtension=="json"}).sorted(by:{$0.lastPathComponent<$1.lastPathComponent}).prefix(40) {
+            guard let data=try? Data(contentsOf:url),let event=try? JSONDecoder().decode(VoiceEvent.self,from:data) else {continue}
+            if ["action","preview","capture_started","correction_suggestion","correction_saved"].contains(event.kind) && Date().timeIntervalSince1970-event.time>30 {try? FileManager.default.removeItem(at:url);continue}
+            if event.kind=="preview" {preview=event.text ?? ""}
+            if event.kind=="transcript",event.mode=="practice" {practiceText=event.text ?? "";practiceResultID=UUID()}
+            if event.kind=="transcript" {finalText=event.text ?? "";preview=""}
+            if event.kind=="capture_started" {preview=""}
+            if event.kind=="error" {error=event.message ?? "Speech error"}
+            onEvent?(event)
+            try? FileManager.default.removeItem(at:url)
+        }
+    }
+}
