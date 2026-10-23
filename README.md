@@ -1,51 +1,76 @@
 # OpenToolkit
 
-**opentoolkit.app** · formerly Pico
+### Speak it. Capture it. Make it clear.
 
-A local Mac toolkit for dictation, screenshots, annotation and quick screen recordings. Notes and meeting transcripts are experimental and off by default.
+Your everyday Mac tools in one local app — dictation, screenshots, screen annotation and recording, with optional notes.
 
-**Early preview · Apple Silicon · macOS 14 or newer.** Built and tested on macOS 26; the macOS 14 minimum still needs testing on a separate machine. Screen recording with microphone requires macOS 15 or newer.
+**Apple Silicon · macOS 14+ · Early preview**
 
-## Install the Mac app
+| | What you can do |
+| --- | --- |
+| 🎙️ **Dictation** | Hold **Fn** and speak into your text box. Choose Parakeet or Whisper, live typing, colours and sounds. |
+| 🪄 **Word corrections** | Review suggested corrections after editing a dictation. Save a replacement, undo it, or disable it in Corrections. Support depends on the target text box. |
+| ↩️ **Recover a transcript** | **Double-tap Shift** to paste your last saved transcript. Triple-tap to open history. The key is customisable. |
+| 👋 **Hey Toolkit** | Say the wake phrase, wait for the cue, then choose a command. Wake listening is optional. |
+| ✨ **Writing modes** | Tidy spacing, format messages, or use a separate local AI model for bullet summaries and email drafts. |
+| 📸 **Screenshots** | Capture a freeform area or full screen. Keep recent captures nearby, edit them, or drag them into another app. |
+| ✏️ **Screenshot editor** | Crop, add text, arrows, shapes, numbered markers and redaction. Undo, zoom, combine images, copy or save. |
+| 🖍️ **Screen annotation** | Draw over your screen with configurable hotkeys, then clear it when finished. |
+| 🎬 **Screen recording** | Capture a region as video or GIF. Capture options include fixed dimensions and scrolling screenshots. |
+| 📝 **Notes · experimental** | Optional local notes, folders, keyword search and meeting transcripts. Off by default. |
 
-When a release is published, download the DMG from [GitHub Releases](https://github.com/Barty-Bart/opentoolkit/releases), open it and drag OpenToolkit into Applications. Open OpenToolkit there, select the tools you want, and grant their macOS permissions. The speech runtime is included; Python, Homebrew and developer tools are not required. The selected dictation model downloads on first use.
+![OpenToolkit screenshot editor with synthetic demonstration artwork](docs/images/screenshot-editor.png)
 
-The repaired local release candidate has passed Apple notarization and Gatekeeper. It has not been published yet. The newer screenshot editor and two-step “Hey Toolkit” flow described below are development changes and are not in that notarized DMG. Check the release notes for the specific download.
+*The actual editor, using demonstration artwork. Your captures stay local unless you choose to share them.*
 
-Before replacing an older version, finish dictation, stop speech in OpenToolkit's Setup, and quit OpenToolkit. Replace the app, then reopen it and start speech. Your history and settings stay in Application Support. Switching from an ad-hoc development build to Developer ID may need a fresh permission grant. Future releases use the same signing identity; automatic updates are not implemented yet.
+## Say “Hey Toolkit”
 
-## Install from the CLI
+```text
+“Hey Toolkit” → wait for the sound / waveform → “start dictating”
+                                             “take a screenshot”
+                                             “summarize into bullet points”
+                                             “turn this into an email”
+```
 
-Install Xcode Command Line Tools (`xcode-select --install`) and Python 3.12, then clone this repository and run from its folder:
+The command window lasts eight seconds. To finish, say **“Hey Toolkit”**, wait for its cue, then **“stop transcribing”**. Change the wake phrase and actions in **Dictation → Customize wake phrase & commands**. Sending, Notes and meeting capture require their settings to be enabled. AI writing needs a local text model such as one served by LM Studio.
+
+## Get started
+
+**Source preview:** install Python 3.12 and Xcode Command Line Tools, clone this repository, then run:
 
 ```sh
 python3.12 scripts/install.py --check
 python3.12 scripts/install.py
 ```
 
-The installer builds `~/Applications/OpenToolkit.app`, with both a Dock icon and menu-bar access. It creates a separate speech environment and downloads dependencies plus the small wake detector. Setup lets you choose tools, a speech model, and GPU / CPU / GPU with CPU fallback. Speech weights download on first use; several GB of disk space and an internet connection are needed for setup. Recognition then runs on your Mac.
+The app appears in `~/Applications/OpenToolkit.app`, in the Dock and in the menu bar. Setup downloads the speech dependencies and model, then guides you through the required Mac permissions. It does not import another app’s history.
 
-Use `--native-only` to skip speech dependencies, or `--no-open` to install without opening the app. Rerun the installer to update after stopping speech in Setup and quitting OpenToolkit. Previous app/code versions are backed up locally. The installer never imports another app's library.
+**DMG:** download the notarized DMG from [GitHub Releases](https://github.com/Barty-Bart/opentoolkit/releases), open it and drag OpenToolkit into Applications. To update later, choose **Check for Updates…** in the menu bar: OpenToolkit downloads the new release, checks that Apple notarized it and that it's signed by the same developer, then restarts into the new version. Your history, settings and permissions stay as they are.
 
-## Use
+[Installation, updating and existing models →](docs/installation.md)
 
-- **Dictation:** hold Fn, or tap Fn to start/stop hands-free dictation. Configure live typing, sounds, indicators, writing modes and correction suggestions in Dictation.
-- **Recover:** double-tap Shift to paste the latest saved transcript; triple-tap for history. Choose another recovery key or turn this off in settings.
-- **Voice commands:** enable Wake phrases, say “Hey Toolkit”, wait for the sound/indicator, then say “start dictating” or “start transcribing”. To finish, say “Hey Toolkit”, pause for the cue, then “stop transcribing”. The command window lasts eight seconds. The prefix and actions are editable; sending and Notes commands require their corresponding settings.
-- **Screenshots:** Command–Shift–4 for a freeform region, Command–Shift–3 for full screen, Command–Shift–5 for capture options including fixed dimensions, scrolling captures and video/GIF. All shortcuts are configurable; macOS or other capture tools may already own them.
-- **Preview:** edit, crop, copy, save, dismiss or drag a capture into another app. The editor has a compact native toolbar, zoom, movable annotations, highlighting, numbered markers and opaque redaction. Drop additional images onto the canvas to combine them. Temporary captures stay in OpenToolkit's local cache until expiry; Save exports a file.
-- **Notes:** optional folders, keyword search, voice notes and meeting/daily sessions in one library. Dictation has its own history. No embeddings or model/account discovery.
+## Useful shortcuts
 
-OpenToolkit requests permissions for enabled tools. Screen capture uses Screen & System Audio Recording. Speech needs Microphone and Accessibility, and macOS may request Input Monitoring. Local ad-hoc builds can need permission again after updates; a CLI installer does not remove this macOS restriction.
+| Action | Default |
+| --- | --- |
+| Dictate | Hold Fn, or tap to toggle |
+| Recover last transcript / open history | Double / triple Shift |
+| Capture area | ⌘ ⇧ 4 |
+| Capture full screen | ⌘ ⇧ 3 |
+| Capture options: dimensions, scrolling, video & GIF | ⌘ ⇧ 5 |
 
-## Privacy and preview limits
+Shortcuts are configurable. Disable conflicting shortcuts in another capture tool or macOS if necessary.
 
-Data lives in `~/Library/Application Support/Pico`, outside the checkout. There is no telemetry, sign-in, sync, email watcher or remote transcription. Model downloads contact their hosts. Never commit your library, custom corrections, sounds, captures, credentials or speech environment.
+## Local by default
 
-The internal `Pico` data directory and bundle identifiers remain stable across the rename, so existing history, corrections and preferences are reused. The former default “Hey Pico” or “Hey OpenToolkit” becomes “Hey Toolkit”; custom wake phrases are preserved. Quit the old Pico app and stop its speech worker before opening OpenToolkit. The repository is now `Barty-Bart/opentoolkit`.
+Speech recognition runs on your Mac. History, approved corrections, notes and captures are stored locally. No telemetry, account, cloud transcription or sync. Optional AI writing connects only to a local server you choose. Microphone dictation does not require FFmpeg.
 
-Stopped dictation is saved as a private recovery recording before recognition, then removed after its transcript commits to history. Failed recordings remain in `Speech/Recovery` within that data folder; there is no automatic retry or expiry yet. This protects processing failures after stopping, not a crash during active capture. Microphone dictation does not require FFmpeg.
+This is an early preview. Text-box insertion, correction detection and screenshot behaviour are still being hardened; test them in your own apps before relying on them. English is configured, screen recording with microphone needs macOS 15+, and older supported macOS versions still need hardware testing. Notes AI summaries, semantic search, profile sync and camera overlays are future work.
 
-English recognition is configured in this preview. Parakeet uses MLX on the GPU; Whisper supports MLX GPU or faster-whisper CPU. Recommendations are hardware heuristics, not performance promises. CPU fallback is optional and cannot recover an OS-killed or hung worker. Exact caret placement and correction detection depend on what the target app exposes through macOS Accessibility.
+[Privacy and limitations](docs/privacy-and-limits.md) · [Testing](docs/testing.md) · [Report a problem](https://github.com/Barty-Bart/opentoolkit/issues)
 
-Basic writing modes format text; Sentence bullets splits sentences without summarizing. Optional AI bullet summaries and AI email drafts use a separate text model through a loopback-only OpenAI-compatible server, such as LM Studio. Choose the model explicitly in Dictation → Writing mode; there is no automatic discovery. AI modes wait until you stop, preserve the original transcript, and cancel sending if rewriting fails. Say “Hey Toolkit”, wait for the cue, then “summarize into bullet points” or “turn this into an email” to use a mode once. Notes summaries, semantic search, sync and a camera overlay for recordings are future work. Wake phrases and sending are off by default. Review the [test results and limitations](docs/testing.md) before relying on this preview. Report reproducible problems through [GitHub Issues](https://github.com/Barty-Bart/opentoolkit/issues), without attaching personal transcripts or recordings.
+Please use a synthetic example when reporting a bug. Do not upload your private transcripts, recordings, screenshots or credentials.
+
+## License
+
+OpenToolkit is released under the [MIT License](LICENSE). Bundled third-party components keep their own licenses; their notices ship inside the app.

@@ -30,6 +30,9 @@ def migrate_history(db,path):
 
 def get_value(key,legacy=None,default='',path=None):
     with connect(path) as db:
+        # Plain read first: a write lock is only needed to seed a missing value.
+        row=db.execute('SELECT value FROM library_meta WHERE key=?',(key,)).fetchone()
+        if row:return row[0]
         db.execute('BEGIN IMMEDIATE')
         row=db.execute('SELECT value FROM library_meta WHERE key=?',(key,)).fetchone()
         if row:return row[0]

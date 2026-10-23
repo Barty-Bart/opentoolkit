@@ -24,4 +24,4 @@ Before any notarization upload, review the exact artifact and obtain the owner's
 
 Minimum OS declarations are not compatibility test results. Check native dependencies' deployment targets and run the app on every supported OS. Hardware, global shortcuts, live microphone/GPU inference and permission retention need physical-Mac testing. A successful import test alone does not establish those behaviors.
 
-Third-party dependency notices accompany the app. Choose the project's own license and finish dependency/model license review before public binary distribution.
+Third-party dependency notices accompany the app. OpenToolkit itself is MIT-licensed (see `LICENSE`); dependencies and downloaded model weights keep their own licenses.

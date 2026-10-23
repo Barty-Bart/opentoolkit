@@ -17,7 +17,12 @@ identity="${OPENTOOLKIT_SIGNING_IDENTITY:--}"
 if [[ "$identity" == '-' ]]; then
     echo 'Local ad-hoc build: macOS may require permission again after a rebuild.'
 fi
-codesign --force --sign "$identity" --timestamp=none "$helper"
-codesign --force --sign "$identity" --timestamp=none "$app"
+if [[ "$identity" == '-' ]]; then
+    codesign --force --sign "$identity" --timestamp=none "$helper"
+    codesign --force --sign "$identity" --timestamp=none "$app"
+else
+    codesign --force --sign "$identity" --options runtime --timestamp --entitlements "$root/packaging/app.entitlements.plist" "$helper"
+    codesign --force --sign "$identity" --options runtime --timestamp --entitlements "$root/packaging/app.entitlements.plist" "$app"
+fi
 codesign --verify --deep --strict "$app"
 echo "Built $app"

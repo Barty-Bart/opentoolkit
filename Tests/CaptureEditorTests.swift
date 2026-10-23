@@ -32,6 +32,10 @@ import AppKit
             let bitmap=try pixels();check(bitmap.pixelsWide==160 && bitmap.pixelsHigh==120,"Zoom must not resample export")
         }
         surface.zoomScale=nil
+        // A Retina capture (2 px per point) must keep its point size after export.
+        let retinaSource=fixture(320,240);retinaSource.size=NSSize(width:160,height:120)
+        let retina=NSBitmapImageRep(data:try DrawingSurface(frame:NSRect(x:0,y:0,width:640,height:480),image:retinaSource).renderedPNG())!
+        check(retina.pixelsWide==320 && retina.size==NSSize(width:160,height:120),"Retina export keeps pixels and point size")
         surface.addAnnotation(DrawingMark(tool:.redact,points:[CGPoint(x:40,y:30),CGPoint(x:120,y:90)],color:.red,width:4))
         let redacted=try pixels().colorAt(x:80,y:60)!.usingColorSpace(.deviceRGB)!
         check(redacted.redComponent<0.01 && redacted.greenComponent<0.01 && redacted.blueComponent<0.01 && redacted.alphaComponent>0.99,"Redaction must be opaque black in exported pixels")

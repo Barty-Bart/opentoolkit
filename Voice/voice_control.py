@@ -6,7 +6,7 @@ import numpy as np
 import sounddevice as sd
 from AppKit import NSWorkspace, NSTimer
 from Foundation import NSDistributedNotificationCenter
-from ApplicationServices import (AXUIElementCreateApplication, AXUIElementCopyAttributeValue,AXUIElementSetMessagingTimeout,AXUIElementPerformAction,AXUIElementSetAttributeValue,AXValueCreate,AXValueGetValue,kAXValueCFRangeType)
+from ApplicationServices import (AXUIElementCreateApplication, AXUIElementCopyAttributeValue,AXUIElementSetMessagingTimeout,AXUIElementPerformAction,AXUIElementSetAttributeValue,AXValueCreate,AXValueGetValue,kAXValueCFRangeType,AXIsProcessTrusted)
 from PyObjCTools import AppHelper
 from wake_engine import Detector, MODEL, validate_phrase, command_phrases, detector_phrases, migrate_voice_branding
 from runtime_paths import speech_data, speech_resources
@@ -54,22 +54,143 @@ def ax(el, key):
     err, value = AXUIElementCopyAttributeValue(el, key, None)
     return None if err else value
 
+class FocusTarget(list):
+    """Keep a stable field anchor when a web editor replaces its AX object."""
+    def __init__(self, pid, element, name, bundle):
+        super().__init__((pid, element, name, bundle))
+        self.window = ax(element, 'AXWindow')
+        self.parent = ax(element, 'AXParent')
+        self.role = ax(element, 'AXRole')
+        self.identifier = ax(element, 'AXIdentifier')
+        self.value = ax(element, 'AXValue')
+        self.span = selection_range(element)
+        children = list(ax(self.parent, 'AXChildren') or []) if self.parent is not None else []
+        matches = [i for i, child in enumerate(children[:128]) if CFEqual(child, element)]
+        self.index = matches[0] if len(matches) == 1 else None
+
+def editable_focus(element):
+    """Resolve a focused combo/editor wrapper; never search the whole window."""
+    if element is None or ax(element, 'AXSubrole') == 'AXSecureTextField':
+        return None
+    role = ax(element, 'AXRole')
+    if role in ('AXTextArea', 'AXTextField'):
+        return element
+    if role == 'AXComboBox' and isinstance(ax(element, 'AXValue'), str) and selection_range(element) is not None:
+        return element
+    if role not in ('AXGroup', 'AXComboBox', 'AXScrollArea'):
+        return None
+    candidates = []
+    todo = [(child, 1) for child in list(ax(element, 'AXChildren') or [])[:32]]
+    visited = 0
+    while todo and visited < 32:
+        child, depth = todo.pop(0); visited += 1
+        if ax(child, 'AXSubrole') == 'AXSecureTextField':
+            continue
+        if ax(child, 'AXRole') in ('AXTextArea', 'AXTextField'):
+            if ax(child, 'AXFocused') and selection_range(child) is not None:
+                candidates.append(child)
+        elif depth < 3 and ax(child, 'AXRole') in ('AXGroup', 'AXComboBox', 'AXScrollArea'):
+            todo.extend((descendant, depth+1) for descendant in list(ax(child, 'AXChildren') or [])[:32])
+    return candidates[0] if len(candidates) == 1 and not todo else None
+
+_last_focus_issue = None
+
 def focus():
+    global _last_focus_issue
     app = NSWorkspace.sharedWorkspace().frontmostApplication()
     if app is None:
         return None
     root = AXUIElementCreateApplication(app.processIdentifier())
     AXUIElementSetMessagingTimeout(root, 0.2)
-    el = ax(root, 'AXFocusedUIElement')
-    if el is None or ax(el, 'AXRole') not in ('AXTextArea', 'AXTextField'):
+    error, raw = AXUIElementCopyAttributeValue(root, 'AXFocusedUIElement', None)
+    el = editable_focus(raw) if not error else None
+    if el is None:
+        # Metadata only: never log text, selection contents, URLs or window titles.
+        issue=(app.bundleIdentifier(), error, ax(raw, 'AXRole') if raw is not None else None)
+        if issue != _last_focus_issue:
+            log.info('focus unavailable bundle=%s ax_error=%s role=%s', *issue)
+            _last_focus_issue=issue
         return None
-    if ax(el, 'AXSubrole') == 'AXSecureTextField':
+    _last_focus_issue=None
+    return FocusTarget(app.processIdentifier(), el, app.localizedName(), app.bundleIdentifier())
+
+# Roles a Chromium/Electron editor can report while its text box is unreadable.
+UNREPORTED_ROLES = (None, 'AXGroup', 'AXWebArea', 'AXScrollArea')
+
+def unreported_focus():
+    """(pid, bundle) of the frontmost app when it does not report a focused text
+    box at all, as opposed to positively reporting a button, list or password field.
+    Callers may then paste like Cmd-V, guarded by same-app and no-new-input checks."""
+    app = NSWorkspace.sharedWorkspace().frontmostApplication()
+    if app is None or app.bundleIdentifier() in (None, 'local.pico', 'local.pico.speech'):
         return None
-    return (app.processIdentifier(), el, app.localizedName(), app.bundleIdentifier())
+    root = AXUIElementCreateApplication(app.processIdentifier())
+    AXUIElementSetMessagingTimeout(root, 0.2)
+    error, raw = AXUIElementCopyAttributeValue(root, 'AXFocusedUIElement', None)
+    if error or raw is None:
+        # Chromium may have switched its accessibility tree off; ask again for next time.
+        AXUIElementSetAttributeValue(root, 'AXManualAccessibility', True)
+    elif ax(raw, 'AXSubrole') == 'AXSecureTextField' or ax(raw, 'AXRole') not in UNREPORTED_ROLES:
+        return None
+    return (app.processIdentifier(), app.bundleIdentifier())
+
+def same_field_anchor(target, current):
+    """Match a recreated editor structurally; content is checked by the caller."""
+    if not isinstance(target, FocusTarget) or not isinstance(current, FocusTarget):
+        return False
+    return (target[0] == current[0]
+            and target.window is not None and current.window is not None and CFEqual(target.window, current.window)
+            and target.parent is not None and current.parent is not None and CFEqual(target.parent, current.parent)
+            and target.index is not None and target.index == current.index
+            and target.role == current.role and target.identifier == current.identifier)
 
 def same_focus(target):
     current = focus()
-    return current is not None and target is not None and current[0] == target[0] and bool(CFEqual(current[1], target[1]))
+    if current is None or target is None or current[0] != target[0]:
+        return False
+    if CFEqual(current[1], target[1]):
+        return True
+    # A reactive editor may recreate its AX object. Require its exact anchor,
+    # contents AND selection. Same app or screen position alone is insufficient.
+    if (not same_field_anchor(target, current)
+            or not isinstance(target.value, str) or target.span is None
+            or target.value != current.value or target.span != current.span):
+        return False
+    target[1] = current[1]
+    return True
+
+def pasted_suffixes(prefix, suffix):
+    """Web editors expose an empty last paragraph as one line break and drop it
+    once text arrives. Accept only that placeholder, never other changes."""
+    if suffix == '\n' and (not prefix or prefix.endswith('\n')):
+        return (suffix, '')
+    return (suffix,)
+
+def refresh_pasted_target(target, prefix, text, suffix):
+    """Refresh the pre-paste anchor only after exact AX text/caret verification.
+
+    Posting Cmd-V is asynchronous. A web editor can replace its AX object when
+    handling that event, so the normal pre-paste content comparison cannot work.
+    This exception accepts only the known paste result in the original field.
+    Returns the observed (prefix, suffix) around the pasted text, or None.
+    """
+    current = focus()
+    if current is None or target is None or current[0] != target[0]:
+        return None
+    if not CFEqual(current[1], target[1]) and not same_field_anchor(target, current):
+        return None
+    value = ax(current[1], 'AXValue')
+    span = selection_range(current[1])
+    if span != (utf16len(prefix + text), 0):
+        return None
+    observed = next((s for s in pasted_suffixes(prefix, suffix) if value == prefix + text + s), None)
+    if observed is None:
+        return None
+    if isinstance(target, FocusTarget):
+        target[1] = current[1]
+        target.value = value
+        target.span = span
+    return prefix, observed
 
 def selection_range(element):
     value=ax(element,'AXSelectedTextRange')
@@ -110,6 +231,8 @@ class LiveInsertion:
         self.paste(text)
         self.text=text;self.changed=True;self.expected=self.before+text+self.after
         self.span=(self.start+utf16len(text),0)
+        if isinstance(self.target, FocusTarget):
+            self.target.value=self.expected;self.target.span=self.span
         return True
 
 def send_button(target):
@@ -239,6 +362,7 @@ class VoiceControl:
             finally:path.unlink(missing_ok=True)
         state={'time':time.time(),'status':self.status,'recording':self.d.recording,'busy':self.d.busy,'wake':self.enabled,'awaitingCommand':self.command_session.active(time.monotonic(),self.epoch),'microphone':self.mic_ready,'detectorReady':self.detector_ready,'mode':self.long_mode or self.capture_mode,'level':float(self.d.level),'segmentPending':self.segment_pending}
         state['keyListenerReady']=bool(getattr(self.d,'key_listener_ready',False))
+        state['accessibilityGranted']=bool(AXIsProcessTrusted())
         if not state['keyListenerReady'] and not self.d.recording and not self.d.busy:
             state['status']='Fn unavailable — enable OpenToolkit Speech in System Settings → Privacy & Security → Accessibility'
         transcriber=getattr(self.d,'transcriber',None)
@@ -290,7 +414,7 @@ class VoiceControl:
         if action=='system_audio':
             self.transcribe_system(c);return
         if action=='pause':
-            self.enabled=False;self.paused_file.touch();self.epoch+=1;self.stop_long();self.d.stop(False);self.label();return
+            self.enabled=False;self.paused_file.touch();self.epoch+=1;self.stop_long();self.d.stop(deliver=False);self.label();return
         if action=='wake_on':
             self.paused_file.unlink(missing_ok=True);self.enabled=True;self.epoch+=1;self.label();return
         if action=='wake_off':self.enabled=False;self.paused_file.touch();self.epoch+=1;self.label();return
@@ -316,7 +440,7 @@ class VoiceControl:
             self.send_after=False;self.d.start(voice=True,target=target)
             self.emit('capture_started',mode=self.capture_mode)
     def pause_for_lock(self):
-        self.enabled=False;self.paused_file.touch();self.stop_long();self.d.stop(False);self.epoch+=1;self.label('Paused when screen locked — enable wake phrases to resume')
+        self.enabled=False;self.paused_file.touch();self.stop_long();self.d.stop(deliver=False);self.epoch+=1;self.label('Paused when screen locked — enable wake phrases to resume')
     def _audio(self,data,frames,clock,status):
         samples=data[:,0].copy();rms=float(np.sqrt(np.mean(samples*samples)))
         with self.d.audio_lock:
@@ -383,7 +507,10 @@ class VoiceControl:
     def _detect(self):
         detector=None;previous=-1
         while True:
-            epoch,samples=self.queue.get()
+            try:epoch,samples=self.queue.get(timeout=.2)
+            except queue.Empty:
+                if not self.enabled:continue
+                epoch,samples=self.epoch,np.zeros(1600,dtype=np.float32)
             if epoch!=self.epoch or not self.enabled or self.d.busy:continue
             try:
                 commands=detector_phrases(self.config)
@@ -407,7 +534,6 @@ class VoiceControl:
         self.d.end_wake_feedback()
         result={'start_transcribing':'start','screenshot_short':'screenshot'}.get(result,result)
         self.accept(result,epoch)
-        self.label()
 
     def accept(self,result,epoch):
         if epoch!=self.epoch or not self.enabled or self.d.busy:return
@@ -419,9 +545,9 @@ class VoiceControl:
         self.last_command=time.monotonic()
         log.info('voice action=%s recording=%s mode=%s', result, self.d.recording, self.capture_mode)
         if self.d.recording:
-            if result=='stop':self.d.stop()
+            if result=='stop':self.d.stop(voice_end=True)
             elif result=='cancel':self.d.stop(False)
-            elif result=='send' and self.config.get('sendEnabled') and self.capture_mode=='dictation':self.send_after=True;self.d.stop()
+            elif result=='send' and self.config.get('sendEnabled') and self.capture_mode=='dictation':self.send_after=True;self.d.stop(voice_end=True)
         else:
             if result in ('start','note','reminder','meeting','summarize','email'):self.command(result)
             elif result in ('screenshot','annotate','record','record_stop'):self.emit('action',action=result)
@@ -430,11 +556,17 @@ class VoiceControl:
                 if button is not None:AXUIElementPerformAction(button,'AXPress')
                 else:self.label('No supported Send button found')
     def strip_command(self,text):
+        # The keyword detector hears the wake word and action in separate turns.
+        # ASR often punctuates that pause as "Hey Toolkit. Stop transcribing."
+        separator=r'[\s,.:;!?—–-]+'
         for name in ('stop','send','cancel'):
             phrase=command_phrases(self.config).get(name,'')
-            pattern=r'[\s,.!?;:—-]*\b'+r'[\s,]+'.join(re.escape(w) for w in phrase.split())+r'[\s.!?,]*$'
-            # ASR may render the product name as one word or two.
-            pattern=pattern.replace(r'open[\s,]+toolkit',r'open[\s,]*toolkit')
+            words=[re.escape(w) for w in phrase.split()]
+            # Accept transcription spacing of the product name without making
+            # arbitrary custom commands fuzzy or removing ordinary prose.
+            words=[r'tool[\s,.:;!?—–-]*kit' if w.casefold()=='toolkit' else w for w in words]
+            pattern=r'[\s,.!?;:—–-]*\b'+separator.join(words)+r'[\s.!?,;:—–-]*$'
+            pattern=pattern.replace('open'+separator+r'tool[\s,.:;!?—–-]*kit', r'open[\s,.:;!?—–-]*tool[\s,.:;!?—–-]*kit')
             text=re.sub(pattern,'',text,flags=re.I).strip()
         return text
     def delivery_status(self, message, error=False):
@@ -442,21 +574,52 @@ class VoiceControl:
         log.info('delivery: %s', message)
         self.emit('error' if error else 'delivery', message=message)
 
+    def confirm_paste(self, target, prefix, text, suffix, revision, generation, send=False):
+        """Verify one asynchronous paste before correction watching or sending."""
+        attempts = [0]
+        def attempt(timer):
+            if (generation != getattr(self.d, 'delivery_generation', 0) or self.d.recording
+                    or revision != getattr(self.d, 'input_revision', 0)):
+                self.delivery_status('Input changed after paste; automatic sending and correction watching cancelled. The transcript is saved in history.', True)
+                return
+            attempts[0] += 1
+            observed = refresh_pasted_target(target, prefix, text, suffix)
+            if observed:
+                log.info('paste verified bundle=%s attempts=%d', target[3], attempts[0])
+                if send:
+                    self.send_when_pasted(target, text)
+                else:
+                    self.watch_correction(target, observed[0], text, observed[1])
+                    self.delivery_status('Transcription pasted.')
+                return
+            if attempts[0] < 8:
+                NSTimer.scheduledTimerWithTimeInterval_repeats_block_(.1, False, attempt)
+                return
+            # Metadata only: the target app, never its text.
+            log.info('paste unverified bundle=%s attempts=%d', target[3], attempts[0])
+            self.delivery_status('Could not verify the pasted text. The transcript is saved in history; automatic sending and correction watching were skipped.', True)
+        NSTimer.scheduledTimerWithTimeInterval_repeats_block_(.1, False, attempt)
+
     def recover_last(self, target):
-        if not same_focus(target):
+        # Recovery is an explicit request: like Cmd-V, it may paste into an app that
+        # does not report its text box, but never after focus moves to another app.
+        verified = same_focus(target)
+        fallback = None if verified else unreported_focus()
+        if not verified and fallback is None:
             self.delivery_status('Click a text box, then double-tap to paste the last transcription.', True)
             return
         try:
             from library_store import library_path
             path=library_path()
             with sqlite3.connect(path.as_uri()+'?mode=ro', uri=True, timeout=.5) as db:
-                row=db.execute('SELECT text FROM dictations ORDER BY id DESC LIMIT 1').fetchone()
+                row=db.execute("SELECT text FROM dictations WHERE app IS NULL OR app NOT IN ('meeting','ambient','meeting system audio') ORDER BY id DESC LIMIT 1").fetchone()
             if not row or not row[0]:
                 self.delivery_status('No saved transcription to recover yet.', True); return
-            if not same_focus(target):
+            if not (unreported_focus() == fallback if fallback else same_focus(target)):
                 self.delivery_status('Focus changed. Recovery did not paste.', True); return
             self.paste(row[0])
             self.delivery_status('Last saved transcription pasted. Nothing was sent.')
+            if fallback: log.info('recovery pasted without field report bundle=%s', fallback[1])
         except Exception:
             log.exception('Recovery failed')
             self.delivery_status('Could not read speech history. Triple-tap to open history.', True)

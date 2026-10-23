@@ -13,6 +13,7 @@ import sys
 import urllib.request
 
 from install import MODEL, MODEL_URL, MODEL_SHA256, extract_wake_model, check_system
+from signing_identity import validate_release
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -131,6 +132,7 @@ def main():
     sign(helper, identity, ROOT/'packaging/speech.entitlements.plist')
     sign(app, identity, ROOT/'packaging/app.entitlements.plist')
     run('codesign', '--verify', '--deep', '--strict', app)
+    signing = validate_release(app) if not args.development else None
     test_home = work/'self-test-home'
     test_home.mkdir()
     test_env = dict(environment, HOME=str(test_home), PATH='/usr/bin:/bin:/usr/sbin:/sbin',
@@ -162,6 +164,7 @@ def main():
                 for p in sorted(stage.rglob('*')) if p.is_file() and not p.is_symlink()}
     report = {'dmg': output.name, 'sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
               'development': args.development, 'notarized': False, 'published': False,
+              'signingIdentities': signing,
               'wakeArchiveSHA256': MODEL_SHA256, 'files': manifest}
     output.with_suffix('.manifest.json').write_text(json.dumps(report, indent=2)+'\n')
     print('Prepared '+str(output)+'; not uploaded or notarized. Review before any upload.')

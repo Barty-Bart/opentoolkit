@@ -193,7 +193,7 @@ final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToo
     @objc private func cancelCrop() {surface.cancelCrop()}
     @objc private func undoEdit() {surface.undo()}
     @objc private func redoEdit() {surface.redo()}
-    @objc private func done() {if save(){close()}}
+    @objc private func done() {if !surface.hasChanges || save(){close()}}
     @objc private func togglePin() {window?.level=pinButton.state == .on ? .floating:.normal}
     @objc private func addImages() {
         let panel=NSOpenPanel();panel.allowedContentTypes=[.image];panel.allowsMultipleSelection=true
@@ -215,6 +215,8 @@ final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToo
         do {if let image=NSImage(data:try surface.renderedPNG()){NSSharingServicePicker(items:[image]).show(relativeTo:sender.bounds,of:sender,preferredEdge:.minY)}} catch {report(error.localizedDescription)}
     }
     @discardableResult private func save() -> Bool {
+        // Saving writes PNG data in place; never flatten an animated GIF into one frame.
+        guard item.url.pathExtension.lowercased()=="png" else {report("This capture can't be saved in place. Use Export or Copy to keep your edits.");return false}
         do {
             let data=try surface.renderedPNG();try data.write(to:item.url,options:.atomic)
             try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:item.url.path)

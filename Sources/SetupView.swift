@@ -25,17 +25,7 @@ struct SetupView: View {
             Toggle("Local dictation",isOn:$speech)
             Toggle("Notes and meeting transcripts (experimental)",isOn:$notes)
             Text("The downloadable app includes its speech runtime. First start downloads the selected model from Hugging Face and can take several minutes. Dictation then runs locally. Wake phrases, sending, and continuous capture start off.").font(.callout).foregroundStyle(.secondary)
-            GroupBox("Permissions — enable only the tools you use") {
-                VStack(alignment:.leading,spacing:8) {
-                    Text("OpenToolkit: Screen & System Audio Recording for captures. OpenToolkit Speech: Microphone and Accessibility for dictation and typing. macOS may also request Input Monitoring for shortcuts.")
-                    HStack {
-                        Button("Screen Recording…"){permission("ScreenCapture")}
-                        Button("Microphone…"){permission("Microphone")}
-                        Button("Accessibility…"){permission("Accessibility")}
-                    }
-                    Text("Permissions remain under your control in System Settings. Local ad-hoc rebuilds may require granting them again.").font(.caption).foregroundStyle(.secondary)
-                }.padding(8)
-            }
+            PermissionsView(voice:model.voice)
             if !message.isEmpty {Text(message).foregroundStyle(.orange)}
             HStack {
                 Button("Open OpenToolkit") {

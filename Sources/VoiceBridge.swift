@@ -2,6 +2,7 @@ import Foundation
 import Combine
 
 struct SpeechState: Decodable {
+    var accessibilityGranted: Bool? = nil
     var keyListenerReady: Bool? = nil
     var compute: String? = nil
     var fallback: Bool? = nil
@@ -91,6 +92,12 @@ struct VoiceEvent: Decodable {
     func startSpeech() {
         guard runtimeInstalled else{error="Install the speech runtime using the CLI installer first.";return}
         let helper=Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/OpenToolkit Speech.app/Contents/MacOS/OpenToolkitSpeech")
+        // An explicit app start resumes the saved wake preference after a prior quit.
+        if settings.wakeEnabled {
+            let marker=root.deletingLastPathComponent().appendingPathComponent("Speech/voice-commands.disabled")
+            try? FileManager.default.removeItem(at:marker)
+            command("wake_on")
+        }
         guard FileManager.default.isExecutableFile(atPath:helper.path) else{error="Speech helper is missing. Rebuild OpenToolkit.";return}
         let directory=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
         let agent=directory.appendingPathComponent("local.pico.speech.plist")
@@ -114,9 +121,9 @@ struct VoiceEvent: Decodable {
     }
     func reset() {
         guard !state.recording && !state.busy && !["ambient","meeting"].contains(state.mode) else{error="Finish the current capture before resetting speech.";return}
-        settings.wakeEnabled=false;persist()
+        // Reset repairs speech without silently turning the user's wake setting off.
         let marker=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pico/Speech/voice-commands.disabled")
-        try? Data().write(to:marker)
+        if settings.wakeEnabled {try? FileManager.default.removeItem(at:marker)}
         if launchctl(["print",service]) {_ = launchctl(["kickstart","-k",service]);state.status="Restarting speech…"}else{startSpeech()}
     }
     private func poll() {
@@ -125,7 +132,12 @@ struct VoiceEvent: Decodable {
         } else {connected=false}
         guard let files=try? FileManager.default.contentsOfDirectory(at:root.appendingPathComponent("events"),includingPropertiesForKeys:nil) else{return}
         for url in files.filter({$0.pathExtension=="json"}).sorted(by:{$0.lastPathComponent<$1.lastPathComponent}).prefix(40) {
-            guard let data=try? Data(contentsOf:url),let event=try? JSONDecoder().decode(VoiceEvent.self,from:data) else {continue}
+            guard let data=try? Data(contentsOf:url),let event=try? JSONDecoder().decode(VoiceEvent.self,from:data) else {
+                // Events are written atomically; a stale unreadable file would otherwise block the queue.
+                let modified=(try? url.resourceValues(forKeys:[.contentModificationDateKey]))?.contentModificationDate ?? Date()
+                if Date().timeIntervalSince(modified)>60 {try? FileManager.default.removeItem(at:url)}
+                continue
+            }
             if ["action","preview","capture_started","correction_suggestion","correction_saved"].contains(event.kind) && Date().timeIntervalSince1970-event.time>30 {try? FileManager.default.removeItem(at:url);continue}
             if event.kind=="preview" {preview=event.text ?? ""}
             if event.kind=="transcript",event.mode=="practice" {practiceText=event.text ?? "";practiceResultID=UUID()}

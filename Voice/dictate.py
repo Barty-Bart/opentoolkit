@@ -93,7 +93,13 @@ def load_replacements():
 
 
 def apply_replacements(text: str) -> str:
-    for pattern, right in load_replacements():
+    try:
+        rules = load_replacements()
+    except sqlite3.Error:
+        # A busy library must not turn a finished dictation into a failure.
+        log.warning("Manual replacements unavailable; preserving original transcript")
+        rules = []
+    for pattern, right in rules:
         text = pattern.sub(right, text)
     from corrections import RuleStore
     return RuleStore(Path.home()/"Library/Application Support/Pico/Speech/corrections.json").apply(text)
@@ -150,16 +156,28 @@ def frontmost_app():
     return app.localizedName() if app else None
 
 
+_clipboard_lock = threading.Lock()
+_clipboard_pending = None  # the user's clipboard while an earlier paste awaits restore
+CLIPBOARD_RESTORE_SECONDS = 1.0
+
+
 def paste(text: str):
     """Put text on the clipboard, press Cmd+V, then restore the old clipboard."""
+    global _clipboard_pending
     pb = NSPasteboard.generalPasteboard()
-    saved = []
-    for item in pb.pasteboardItems() or []:
-        saved.append({t: item.dataForType_(t) for t in item.types() if item.dataForType_(t) is not None})
-
-    pb.clearContents()
-    pb.setString_forType_(text, NSPasteboardTypeString)
-    change = pb.changeCount()
+    with _clipboard_lock:
+        if _clipboard_pending is not None:
+            # Back-to-back pastes: keep the user's clipboard, not our earlier transcript.
+            saved = _clipboard_pending['saved']
+        else:
+            saved = []
+            for item in pb.pasteboardItems() or []:
+                saved.append({t: item.dataForType_(t) for t in item.types() if item.dataForType_(t) is not None})
+        pb.clearContents()
+        pb.setString_forType_(text, NSPasteboardTypeString)
+        change = pb.changeCount()
+        token = object()
+        _clipboard_pending = {'saved': saved, 'token': token}
 
     src = Quartz.CGEventSourceCreate(Quartz.kCGEventSourceStateCombinedSessionState)
     for down in (True, False):
@@ -169,18 +187,24 @@ def paste(text: str):
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
     def restore():
-        time.sleep(0.5)
-        if pb.changeCount() != change or not saved:
-            return  # something else touched the clipboard; leave it alone
-        from AppKit import NSPasteboardItem
-        pb.clearContents()
-        items = []
-        for types in saved:
-            item = NSPasteboardItem.alloc().init()
-            for t, data in types.items():
-                item.setData_forType_(data, t)
-            items.append(item)
-        pb.writeObjects_(items)
+        global _clipboard_pending
+        # Slow targets handle Cmd-V late; restoring too early pastes the old clipboard.
+        time.sleep(CLIPBOARD_RESTORE_SECONDS)
+        with _clipboard_lock:
+            if _clipboard_pending is None or _clipboard_pending['token'] is not token:
+                return  # a later paste owns the restore
+            _clipboard_pending = None
+            if pb.changeCount() != change or not saved:
+                return  # something else touched the clipboard; leave it alone
+            from AppKit import NSPasteboardItem
+            pb.clearContents()
+            items = []
+            for types in saved:
+                item = NSPasteboardItem.alloc().init()
+                for t, data in types.items():
+                    item.setData_forType_(data, t)
+                items.append(item)
+            pb.writeObjects_(items)
 
     threading.Thread(target=restore, daemon=True).start()
 
@@ -268,15 +292,17 @@ def _ax_rect_for_range(el, loc, length):
     return r
 
 
-_ax_enabled_pids = set()
+_ax_enabled_pids = {}
+AX_REENABLE_SECONDS = 20  # Chromium switches accessibility off again when idle
 
 
 def enable_app_accessibility(pid):
     """Chromium/Electron apps (Claude, ChatGPT, Chrome, VS Code) only expose their
     text cursor to other apps after being asked to build their accessibility tree."""
-    if pid in _ax_enabled_pids:
+    now = time.monotonic()
+    if now - _ax_enabled_pids.get(pid, -AX_REENABLE_SECONDS) < AX_REENABLE_SECONDS:
         return
-    _ax_enabled_pids.add(pid)
+    _ax_enabled_pids[pid] = now
     app = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(app, 0.2)
     AXUIElementSetAttributeValue(app, "AXManualAccessibility", True)
@@ -555,9 +581,13 @@ class Dictation:
             self.audio_frames = 0
             self.app = frontmost_app()
             self.voice_session = voice
-            from voice_control import focus
+            from voice_control import focus, unreported_focus
             self.target = target if voice else focus()
+            # Apps that hide their text box from Accessibility may still be pasted into
+            # later, but only if the same app stays in front and nothing is typed or clicked.
+            self.fallback_app = unreported_focus() if self.target is None and not voice else None
             self.delivery_revision = getattr(self, 'input_revision', 0)
+            self.delivery_generation = getattr(self, 'delivery_generation', 0) + 1
             self.recording = True
             self.feedback_started = False
             self.preview_offset = 0
@@ -576,7 +606,7 @@ class Dictation:
         self.indicator.show_recording()
         log.info("recording started (%s)", "wake" if voice else "Fn")
 
-    def stop(self, keep=True):
+    def stop(self, keep=True, voice_end=False, deliver=True):
         with self.audio_lock:
             if not self.recording:
                 return
@@ -584,7 +614,7 @@ class Dictation:
             self.hands_free = False
             audio = np.concatenate(self.chunks) if self.chunks else np.zeros(0, dtype=np.float32)
             self.chunks = []
-            context = {'app': self.app, 'voice': self.voice_session, 'target': self.target, 'mode':self.voice_control.capture_mode, 'send':self.voice_control.send_after, 'live':getattr(self,'live_insertion',None), 'input_revision':getattr(self,'delivery_revision',0),'writing_mode':getattr(self,'session_writing_mode','verbatim'),'writing_config':dict(self.voice_control.config)}
+            context = {'app': self.app, 'voice': self.voice_session, 'voice_end': voice_end, 'deliver': deliver, 'target': self.target, 'mode':self.voice_control.capture_mode, 'send':self.voice_control.send_after, 'live':getattr(self,'live_insertion',None), 'fallback_app':getattr(self,'fallback_app',None), 'input_revision':getattr(self,'delivery_revision',0),'delivery_generation':getattr(self,'delivery_generation',0),'writing_mode':getattr(self,'session_writing_mode','verbatim'),'writing_config':dict(self.voice_control.config)}
             self.voice_control.send_after=False
             self.voice_session = False
             self.target = None
@@ -696,19 +726,21 @@ class Dictation:
         try:
             pending = PendingRecording(audio, SAMPLE_RATE, getattr(self, "recovery_directory", None))
         except Exception:
+            # Still transcribe: dropping the in-memory audio here would lose the dictation.
             log.exception("Could not preserve recording before transcription")
-            self.recovery_error = "Could not save a recovery recording. Check free disk space and folder permissions."
-            return
+            pending = None
         try:
             original_text = self.transcriber.transcribe(audio)
-            pending.save_text(original_text)
+            if pending is not None:
+                pending.save_text(original_text)
             text = apply_replacements(original_text)
         except Exception:
             log.exception("transcription failed; recording retained for recovery")
-            self.recovery_error = "Transcription failed. Your recording is retained in Pico/Speech/Recovery."
+            self.recovery_error = ("Transcription failed. Your recording is retained in Pico/Speech/Recovery." if pending is not None
+                                   else "Transcription failed, and the recording could not be saved for recovery. Check free disk space.")
             return
         log.info('finish mode=%s send=%s target=%s', context['mode'], bool(context.get('send')), bool(context.get('target')))
-        if context['voice'] or context.get('send'):
+        if context['voice'] or context.get('send') or context.get('voice_end'):
             text = self.voice_control.strip_command(text)
         from text_formatting import format_text
         writing_mode=context.get('writing_mode') or (self.voice_control.config.get('writingMode','verbatim') if context['mode'] in ('dictation','practice') else 'verbatim')
@@ -735,7 +767,8 @@ class Dictation:
             (text, app, round(secs, 2), ms, self.transcriber.name,original_text,writing_mode))
         self.db.commit()
         try:
-            pending.complete()
+            if pending is not None:
+                pending.complete()
         except OSError:
             log.exception("Transcript saved; could not remove its recovery copy")
         self.voice_control.emit('transcript',text=text,mode=context['mode'],final=True)
@@ -743,14 +776,29 @@ class Dictation:
             from voice_control import same_focus
             if context['mode'] != 'dictation':
                 return
+            if not context.get('deliver', True):
+                self.voice_control.delivery_status('Dictation stopped while paused or locked. The transcript is saved in history; nothing was pasted.', True)
+                return
+            if (context.get('delivery_generation', getattr(self, 'delivery_generation', 0)) != getattr(self, 'delivery_generation', 0)
+                    or getattr(self, 'recording', False)):
+                self.voice_control.delivery_status('A new dictation started; the earlier transcript is saved in history.', True)
+                return
             if not AXIsProcessTrustedWithOptions(None):
                 self.voice_control.delivery_status('Saved to history; Accessibility permission is needed to paste.', True)
                 return
             if context.get('input_revision',getattr(self,'input_revision',0)) != getattr(self,'input_revision',0):
                 self.voice_control.delivery_status('Typing or selection changed — transcription saved in history; automatic paste cancelled.', True)
                 return
+            if context['target'] is None and context.get('fallback_app'):
+                from voice_control import unreported_focus
+                if unreported_focus() == context['fallback_app']:
+                    paste(text)
+                    log.info('pasted without field report bundle=%s', context['fallback_app'][1])
+                    self.voice_control.delivery_status('Pasted. This app does not report its text box, so the paste was not double-checked; automatic sending and correction watching were skipped.')
+                    return
             if not same_focus(context['target']):
-                self.voice_control.delivery_status('Focus changed — transcription saved in history. Double-tap your recovery key in the text box to paste it.', True)
+                reason = 'No editable text box was detected when dictation started.' if context['target'] is None else 'The original text box could not be verified.'
+                self.voice_control.delivery_status(reason+' Transcription saved in history. Double-tap your recovery key in the text box to paste it.', True)
                 return
             from voice_control import focus,ax,selection_range,split_utf16
             edit_target=focus();edit_parts=None
@@ -770,6 +818,14 @@ class Dictation:
                     return
             else:
                 paste(text)
+                if edit_parts is not None:
+                    self.voice_control.confirm_paste(edit_target, edit_parts[0], text, edit_parts[1],
+                        context.get('input_revision', getattr(self, 'input_revision', 0)),
+                        context.get('delivery_generation', getattr(self, 'delivery_generation', 0)),
+                        send=bool(context.get('send')))
+                else:
+                    self.voice_control.delivery_status('Paste requested, but this field does not expose text for verification. The transcript is saved in history; automatic sending and correction watching were skipped.', True)
+                return
             if edit_parts is not None and not context.get('send'):
                 self.voice_control.watch_correction(edit_target,edit_parts[0],text,edit_parts[1])
             if context.get('send'):
@@ -782,17 +838,18 @@ class Dictation:
             return
         if down and not self.fn_down:
             self.fn_down, self.fn_down_at, self.combo = True, now, False
-            if self.hands_free:
+            if self.hands_free and self.recording:
                 self.stop()             # second tap ends hands-free mode
                 self.fn_down = False    # so the matching release is ignored
             else:
+                self.hands_free = False  # a refused earlier tap must not swallow this press
                 self.start()
         elif not down and self.fn_down:
             self.fn_down = False
             if self.combo:
                 self.stop(keep=False)
             elif now - self.fn_down_at < TAP_SECONDS:
-                self.hands_free = True  # quick tap: keep listening
+                self.hands_free = self.recording  # quick tap: keep listening
             else:
                 self.stop()
 
@@ -875,10 +932,8 @@ def make_tap(dictation):
 def ensure_permissions():
     AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
         AVFoundation.AVMediaTypeAudio, lambda granted: log.info("microphone access: %s", granted))
-    listen = Quartz.CGPreflightListenEventAccess()
-    log.info("input monitoring (Fn key) access: %s", listen)
-    if not listen:
-        Quartz.CGRequestListenEventAccess()
+    # The Fn listener uses a filtering event tap and requires Accessibility.
+    # Do not request unrelated Input Monitoring access for a listen-only tap.
     trusted = AXIsProcessTrustedWithOptions(NSDictionary.dictionaryWithDictionary_({"AXTrustedCheckOptionPrompt": True}))
     log.info("accessibility (paste) access: %s", trusted)
 

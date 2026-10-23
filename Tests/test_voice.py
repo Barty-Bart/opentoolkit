@@ -246,6 +246,22 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(self.c.strip_command('Keep this. Hello Pocket, stop transcribing.'),'Keep this')
         self.assertEqual(self.c.strip_command('Keep this. Stop transcribing.'),'Keep this. Stop transcribing.')
 
+    def test_stop_command_is_removed_when_asr_punctuates_the_wake_pause(self):
+        for ending in ('Hey Toolkit. Stop transcribing.', 'Hey, toolkit! Stop transcribing.',
+                       'Hey Tool Kit. Stop transcribing...', 'HEY TOOLKIT — STOP TRANSCRIBING!'):
+            with self.subTest(ending=ending):
+                self.assertEqual(self.c.strip_command('The blue notebook is on the desk. '+ending),
+                                 'The blue notebook is on the desk')
+
+    def test_command_punctuation_does_not_remove_ordinary_or_nonterminal_words(self):
+        for sentence in ('I want to stop transcribing.', 'Hey Toolkit. Stop transcribing means finish.',
+                         'The toolkit stopped transcribing.', 'Hello Pocket. Stop transcribing.'):
+            self.assertEqual(self.c.strip_command(sentence), sentence)
+
+    def test_custom_wake_and_send_command_accept_sentence_separators(self):
+        self.c.config['wakePhrase']='hello pocket'
+        self.assertEqual(self.c.strip_command('Keep this. Hello Pocket. Finish and send!'), 'Keep this')
+
     def test_legacy_start_prefix_is_not_duplicated(self):
         self.c.config['phrases']['start']='hey toolkit start dictating'
         self.assertEqual(w.command_phrases(self.c.config)['start'],'hey toolkit start dictating')
@@ -407,8 +423,9 @@ class VoiceTests(unittest.TestCase):
             self.assertFalse(callbacks);press.assert_not_called()
             self.assertEqual(self.emissions[-1][0],'error')
     def test_recovery_reads_last_row_and_never_sends_or_starts_model(self):
-        db=sqlite3.connect(':memory:');db.execute('create table dictations(id integer primary key,text text)')
-        db.executemany('insert into dictations(text) values (?)',[('old',),('latest',)])
+        db=sqlite3.connect(':memory:');db.execute('create table dictations(id integer primary key,text text,app text)')
+        # Meeting/ambient segments share the table; recovery must skip them.
+        db.executemany('insert into dictations(text,app) values (?,?)',[('old','Notes'),('latest',None),('meeting words','meeting'),('room words','ambient'),('call words','meeting system audio')])
         with patch.object(v,'same_focus',return_value=True),patch.object(v.sqlite3,'connect',return_value=db),patch.object(v,'AXUIElementPerformAction') as press:
             self.c.recover_last((1,'field'))
             self.c.paste.assert_called_once_with('latest');press.assert_not_called()
@@ -645,13 +662,104 @@ class VoiceTests(unittest.TestCase):
         cls, env = dictation_class()
         d = cls.__new__(cls); d.voice_control = self.c; d.transcriber = Mock()
         d.transcriber.name = "fake"; d.transcriber.transcribe.return_value = "Hello there. Hey Toolkit, finish and send."
-        d.db = Mock(); self.c.send_when_pasted = Mock()
+        d.db = Mock(); self.c.send_when_pasted = Mock(); self.c.confirm_paste = Mock()
         target = (100, "field", "Test", "com.openai.codex")
-        with patch.object(v, "same_focus", return_value=True):
+        with patch.object(v, "same_focus", return_value=True), patch.object(v, 'focus', return_value=target), \
+                patch.object(v, 'ax', return_value=''), patch.object(v, 'selection_range', return_value=(0, 0)):
             d._transcribe_and_paste(np.zeros(16000), {"app":"Test", "voice":False, "mode":"dictation", "send":True, "target":target})
         env["paste"].assert_called_once_with("Hello there")
-        self.c.send_when_pasted.assert_called_once_with(target, "Hello there")
+        self.c.confirm_paste.assert_called_once_with(target, '', 'Hello there', '', 0, 0, send=True)
+        self.c.send_when_pasted.assert_not_called()
         d.db.commit.assert_called_once()
+
+    def test_voice_stop_strips_command_from_fn_started_dictation(self):
+        cls, env = dictation_class()
+        d = cls.__new__(cls); d.voice_control = self.c; d.transcriber = Mock()
+        d.transcriber.name = "fake"; d.transcriber.transcribe.return_value = "Hello there. Hey Toolkit. Stop transcribing."
+        d.db = Mock(); self.c.confirm_paste = Mock()
+        target = (100, "field", "Test", "test.editor")
+        with patch.object(v, "same_focus", return_value=True), patch.object(v, 'focus', return_value=target), \
+                patch.object(v, 'ax', return_value=''), patch.object(v, 'selection_range', return_value=(0, 0)):
+            d._transcribe_and_paste(np.zeros(16000), {"app":"Test", "voice":False, "voice_end":True, "mode":"dictation", "send":False, "target":target})
+        env["paste"].assert_called_once_with("Hello there")
+
+    def test_voice_stop_and_send_mark_the_recording_as_voice_ended(self):
+        for result in ('stop', 'send'):
+            with self.subTest(result=result):
+                self.c.d.recording = True; self.c.d.stop = Mock(); self.c.last_command = 0.
+                self.c.config['sendEnabled'] = True
+                self.c.accept(result, self.c.epoch)
+                self.c.d.stop.assert_called_once_with(voice_end=True)
+
+    def test_lock_keeps_recording_in_history_without_pasting(self):
+        self.c.stop_long = Mock(); self.c.paused_file = self.base / 'disabled'
+        self.c.pause_for_lock()
+        self.c.d.stop.assert_called_once_with(deliver=False)
+        cls, env = dictation_class()
+        d = cls.__new__(cls); d.voice_control = self.c; d.transcriber = Mock()
+        d.transcriber.name = "fake"; d.transcriber.transcribe.return_value = "Kept while locked."; d.db = Mock()
+        with patch.object(v, "same_focus", return_value=True):
+            d._transcribe_and_paste(np.zeros(16000), {"app":"Test", "voice":False, "deliver":False, "mode":"dictation", "target":(1, 'field')})
+        d.db.commit.assert_called_once(); env["paste"].assert_not_called()
+        self.assertEqual(self.emissions[-1][0], 'error')
+
+    def test_recovery_copy_failure_still_saves_transcript(self):
+        cls, env = dictation_class()
+        d = cls.__new__(cls); d.voice_control = self.c; d.transcriber = Mock()
+        d.transcriber.name = "fake"; d.transcriber.transcribe.return_value = "Still saved."; d.db = Mock()
+        import audio_recovery
+        with patch.object(audio_recovery, 'PendingRecording', side_effect=OSError('read-only')), \
+                patch.object(v, "same_focus", return_value=False):
+            d._transcribe_and_paste(np.zeros(16000), {"app":"Test", "voice":False, "mode":"dictation", "target":(1, 'field')})
+        d.db.commit.assert_called_once()
+
+    def test_refused_fn_tap_does_not_swallow_the_next_press(self):
+        cls, env = dictation_class()
+        d = cls.__new__(cls); d.voice_control = self.c
+        d.recording = False; d.hands_free = False; d.fn_down = False; d.combo = False
+        d.start = Mock(); d.stop = Mock()   # start() refuses: the worker is still busy
+        d.on_fn(True, 0.0); d.on_fn(False, 0.1)
+        self.assertFalse(d.hands_free)
+        d.on_fn(True, 1.0)
+        self.assertEqual(d.start.call_count, 2); d.stop.assert_not_called()
+        # A real hands-free recording is still ended by the next tap.
+        d.recording = True; d.on_fn(False, 1.1); self.assertTrue(d.hands_free)
+        d.on_fn(True, 2.0); d.stop.assert_called_once_with()
+
+    def test_unreported_text_box_is_pasted_only_in_the_same_app(self):
+        cls, env = dictation_class()
+        claude = (51716, 'com.anthropic.claudefordesktop')
+        for now, pasted in [(claude, True), ((99, 'com.other.app'), False), (None, False)]:
+            with self.subTest(now=now):
+                env['paste'].reset_mock()
+                d = cls.__new__(cls); d.voice_control = self.c; d.transcriber = Mock()
+                d.transcriber.name = "fake"; d.transcriber.transcribe.return_value = "Hidden box text."; d.db = Mock()
+                with patch.object(v, 'unreported_focus', return_value=now), patch.object(v, 'same_focus', return_value=False):
+                    d._transcribe_and_paste(np.zeros(16000), {"app":"Claude", "voice":False, "mode":"dictation", "target":None,
+                                                              "fallback_app":claude, "send":True})
+                self.assertEqual(env['paste'].called, pasted)
+                d.db.commit.assert_called_once()
+
+    def test_unreported_paste_still_requires_no_new_input(self):
+        cls, env = dictation_class()
+        d = cls.__new__(cls); d.voice_control = self.c; d.transcriber = Mock()
+        d.transcriber.name = "fake"; d.transcriber.transcribe.return_value = "Typed over."; d.db = Mock(); d.input_revision = 3
+        with patch.object(v, 'unreported_focus', return_value=(1, 'app')):
+            d._transcribe_and_paste(np.zeros(16000), {"app":"App", "voice":False, "mode":"dictation", "target":None,
+                                                      "fallback_app":(1, 'app'), "input_revision":2})
+        env['paste'].assert_not_called()
+
+    def test_recovery_pastes_into_app_that_hides_its_text_box(self):
+        db=sqlite3.connect(':memory:');db.execute('create table dictations(id integer primary key,text text,app text)')
+        db.execute("insert into dictations(text,app) values ('latest','Claude')")
+        for fallback, pasted in [((5, 'com.anthropic.claudefordesktop'), True), (None, False)]:
+            with self.subTest(fallback=fallback):
+                self.c.paste = Mock()
+                with patch.object(v,'same_focus',return_value=False), patch.object(v,'unreported_focus',return_value=fallback), \
+                        patch.object(v.sqlite3,'connect',return_value=db):
+                    self.c.recover_last(None)
+                self.assertEqual(self.c.paste.called, pasted)
+        db.close()
 
     def test_stale_preview_is_suppressed_and_pending_flag_cleared(self):
         cls, _ = dictation_class()
@@ -704,7 +812,7 @@ class VoiceTests(unittest.TestCase):
         order.clear()
         with patch.object(v,"same_focus",return_value=True):
             d._transcribe_and_paste(np.zeros(16000), {"app": "Test", "voice": False, "mode": "dictation", "target":(1,"field")})
-        self.assertEqual(order, ["commit", "event", "paste"])
+        self.assertEqual(order[:3], ["commit", "event", "paste"])
 
     def test_ai_summary_saves_original_and_draft_before_delivery(self):
         cls,env=dictation_class();d=cls.__new__(cls);d.voice_control=self.c
@@ -751,3 +859,49 @@ class VoiceTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class ClipboardRestoreTests(unittest.TestCase):
+    """Fake pasteboard and event APIs; never touches the real clipboard or keyboard."""
+    def load(self):
+        source = ast.parse((ROOT / "Voice" / "dictate.py").read_text())
+        keep = [n for n in source.body if (isinstance(n, ast.FunctionDef) and n.name == 'paste') or
+                (isinstance(n, ast.Assign) and any(getattr(t, 'id', '').startswith(('_clipboard', 'CLIPBOARD')) for t in n.targets))]
+        board = types.SimpleNamespace(items=[{'public.utf8-plain-text': b'user clipboard'}], count=0)
+        class Item:
+            def __init__(self, data): self.data = dict(data)
+            def types(self): return list(self.data)
+            def dataForType_(self, t): return self.data.get(t)
+        class Board:
+            def pasteboardItems(self): return [Item(i) for i in board.items]
+            def clearContents(self): board.items = []; board.count += 1
+            def setString_forType_(self, text, kind): board.items = [{'public.utf8-plain-text': text.encode()}]
+            def changeCount(self): return board.count
+            def writeObjects_(self, items): board.items = [i.data for i in items]
+        class NewItem:
+            @staticmethod
+            def alloc(): return NewItem()
+            def init(self): self.data = {}; return self
+            def setData_forType_(self, data, t): self.data[t] = data
+        restores = []
+        env = dict(threading=types.SimpleNamespace(Lock=threading.Lock, Thread=lambda target, daemon: types.SimpleNamespace(start=lambda: restores.append(target))),
+                   time=types.SimpleNamespace(sleep=lambda s: None), NSPasteboard=types.SimpleNamespace(generalPasteboard=Board),
+                   NSPasteboardTypeString='public.utf8-plain-text', V_KEYCODE=9, Quartz=Mock())
+        sys.modules.setdefault('AppKit', types.ModuleType('AppKit'))
+        with patch.dict(sys.modules['AppKit'].__dict__, {'NSPasteboardItem': NewItem}):
+            exec(compile(ast.Module(body=keep, type_ignores=[]), 'dictate.py paste', 'exec'), env)
+        return env, board, restores, NewItem
+
+    def test_back_to_back_pastes_restore_the_users_clipboard(self):
+        env, board, restores, item = self.load()
+        with patch.dict(sys.modules['AppKit'].__dict__, {'NSPasteboardItem': item}):
+            env['paste']('first transcript'); env['paste']('second transcript')
+            for restore in restores: restore()
+        self.assertEqual(board.items, [{'public.utf8-plain-text': b'user clipboard'}])
+
+    def test_clipboard_changed_by_user_is_left_alone(self):
+        env, board, restores, item = self.load()
+        with patch.dict(sys.modules['AppKit'].__dict__, {'NSPasteboardItem': item}):
+            env['paste']('transcript'); board.items = [{'x': b'new copy'}]; board.count += 1
+            restores[0]()
+        self.assertEqual(board.items, [{'x': b'new copy'}])

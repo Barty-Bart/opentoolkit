@@ -93,6 +93,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='opentoolkit-build-') as tmp:
         subprocess.run(['/bin/bash',str(ROOT/'build.sh'),tmp],check=True)
         source=Path(tmp)/'OpenToolkit.app'
+        from signing_identity import validate_upgrade
+        validate_upgrade(app, source)
         runtime.mkdir(parents=True,exist_ok=True,mode=0o700);data.chmod(0o700)
         if not args.native_only:
             python=runtime/'venv/bin/python'

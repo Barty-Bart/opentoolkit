@@ -1,5 +1,5 @@
 """Conservative, local, explicitly confirmed correction rules."""
-import difflib,json,re,time,uuid,logging
+import difflib,json,re,sqlite3,time,uuid,logging
 from pathlib import Path
 
 def candidate(before,after):
@@ -46,7 +46,7 @@ class RuleStore:
         self.write(rules)
     def apply(self,text):
         try:rules=[r for r in self.read() if r.get('enabled')]
-        except (ValueError,OSError,TypeError,KeyError):
+        except (ValueError,OSError,TypeError,KeyError,sqlite3.Error):
             logging.getLogger('multitool.voice').warning('Correction rules unavailable; preserving original transcript')
             return text
         if not rules:return text

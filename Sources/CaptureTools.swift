@@ -3,6 +3,7 @@ import SwiftUI
 import Combine
 import CoreGraphics
 import ImageIO
+import UniformTypeIdentifiers
 
 /// Decode a small preview rather than a full Retina screenshot for every tray card.
 func captureThumbnail(_ url: URL, maxPixels: Int = 280) -> NSImage? {
@@ -28,11 +29,16 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private let index: CaptureIndex
     private var cleanupTimer: Timer?
     @Published var retentionHours = UserDefaults.standard.object(forKey:"captureRetentionHours") as? Int ?? 24
-    private var selectionWindows: [ToolOverlayWindow] = []
+    private var selectionWindows: [CaptureSelectionPanel] = []
     private var annotationWindows: [ToolOverlayWindow] = []
     private var liveSurfaces: [DrawingSurface] = []
     private var drawingOwner: NSRunningApplication?
     private var heldDrawingTool: String?
+    /// Started from the Draw on Screen key or palette: tool-key releases don't end it.
+    private var stickyDrawing = false
+    /// Tool shortcuts are global hotkeys, so they exist only while drawing is on.
+    var onDrawingActiveChanged: ((Bool) -> Void)?
+    var isDrawingActive: Bool { heldDrawingTool != nil }
     private var annotationColor = NSColor.systemOrange
     private var palette: NSPanel?
     private var paletteController: DrawingToolbarController?
@@ -42,6 +48,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var previewsHidden=false
     private var pinnedPreviews:[NSPanel]=[]
     private var editors: [CaptureEditorController] = []
+    var hasOpenEditor: Bool { editors.contains { $0.window?.isVisible == true } }
     private var captureInFlight = false
     private var captureProcess: Process?
     private var captureFailure: String?
@@ -100,7 +107,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         let generation = selectionGeneration
         report(fixedSize == nil ? "Drag an area to capture · Escape to cancel" : "Move the fixed frame, then click or drag to capture · Escape to cancel")
         for screen in NSScreen.screens {
-            let window = ToolOverlayWindow(frame: screen.frame)
+            let window = CaptureSelectionPanel(frame: screen.frame)
             let selector = RegionSelectionView(frame: window.contentView!.bounds, fixedSize: fixedSize)
             selector.onCancel = { [weak self] in self?.cancel() }
             selector.onComplete = { [weak self, weak window] rect in
@@ -154,7 +161,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                         self.trayItems.insert(item, at: 0)
                         self.saveTrayState()
                         self.showTray()
-                        self.report("Screenshot ready · drag it into an app, or click to annotate")
+                        self.report("Screenshot ready · drag the thumbnail into an app, or double-click to edit")
                     } else {
                         try? FileManager.default.removeItem(at: output)
                         self.showTray()
@@ -184,8 +191,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
         closeSelection()
         for window in annotationWindows { window.orderOut(nil); window.close() }
-        annotationWindows.removeAll(); liveSurfaces.removeAll();heldDrawingTool=nil;drawingOwner=nil
+        let wasDrawing = heldDrawingTool != nil
+        annotationWindows.removeAll(); liveSurfaces.removeAll();heldDrawingTool=nil;drawingOwner=nil;stickyDrawing=false
         palette?.orderOut(nil); palette?.close(); palette = nil; paletteController = nil
+        if wasDrawing { onDrawingActiveChanged?(false) }
         if !captureInFlight {previewsHidden=false;showTray();report("Ready to capture") }
     }
 
@@ -199,15 +208,17 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         liveSurfaces.forEach { $0.finishStroke() }
         annotationWindows.forEach { $0.ignoresMouseEvents = true }
         palette?.orderOut(nil)
-        heldDrawingTool = nil
+        let wasDrawing = heldDrawingTool != nil
+        heldDrawingTool = nil; stickyDrawing = false
         if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
             drawingOwner?.activate(options: [])
         }
+        if wasDrawing { onDrawingActiveChanged?(false) }
         report("Annotations stay visible · use Clear to erase")
     }
 
     func releaseDrawing(_ name: String) {
-        guard heldDrawingTool == name else { return }
+        guard !stickyDrawing, heldDrawingTool == name else { return }
         if name == "text",liveSurfaces.contains(where:{$0.hasTextEntry}) {return}
         endDrawing()
     }
@@ -238,7 +249,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                 let window=ToolOverlayWindow(frame:screen.frame)
                 let surface=DrawingSurface(frame:window.contentView!.bounds,image:nil)
                 surface.onEscape={ [weak self] in self?.endDrawing() }
-                surface.onTextFinished={ [weak self] in DispatchQueue.main.async {if self?.heldDrawingTool == "text" {self?.endDrawing()}} }
+                surface.onTextFinished={ [weak self] in DispatchQueue.main.async {if self?.heldDrawingTool == "text" && self?.stickyDrawing == false {self?.endDrawing()}} }
                 surface.onActivity={ [weak controller,weak surface] in controller?.activeSurface=surface }
                 window.contentView=surface
                 annotationWindows.append(window);liveSurfaces.append(surface)
@@ -247,7 +258,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             controller.onDone={ [weak self] in self?.endDrawing() }
             paletteController=controller
         }
+        let wasDrawing = heldDrawingTool != nil
         heldDrawingTool=name
+        if !wasDrawing { onDrawingActiveChanged?(true) }
         let width=UserDefaults.standard.object(forKey:"annotationWidth") as? Double ?? 4
         let textSize=UserDefaults.standard.object(forKey:"annotationTextSize") as? Double ?? 24
         for (window,surface) in zip(annotationWindows,liveSurfaces) {
@@ -270,7 +283,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         report("Drawing · release the shortcut to return to your app")
     }
 
-    func annotateScreen() { beginDrawing("pen",showPalette:true) }
+    func annotateScreen() {
+        guard !captureInFlight else { return }
+        stickyDrawing = true; beginDrawing("pen",showPalette:true)
+    }
 
     func openEditor(_ item: CaptureItem) {
         if let existing = editors.first(where: { $0.item.url == item.url }) { existing.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
@@ -333,7 +349,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         let panel = NSSavePanel()
         panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
         panel.nameFieldStringValue = item.url.lastPathComponent
-        panel.allowedContentTypes = [.png]
+        panel.allowedContentTypes = [UTType(filenameExtension: item.url.pathExtension) ?? .png]
         NSApp.activate(ignoringOtherApps: true)
         panel.begin { [weak self] response in
             guard let self, response == .OK, let target = panel.url else { return }
@@ -353,11 +369,14 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     func keep(_ item:CaptureItem){if index.keep(name:item.url.lastPathComponent){objectWillChange.send();report("Screenshot kept — it will not expire")}else{report("Could not update screenshot history; cleanup stays conservative")}}
     func setRetention(_ hours:Int){guard [0,1,24,168,720].contains(hours) else{return};retentionHours=hours;UserDefaults.standard.set(hours,forKey:"captureRetentionHours");cleanupExpired()}
     func cleanupExpired(now:Date = Date()){
+        let trayBefore=trayItems.map(\.id)
         for item in captures where index.expired(name:item.url.lastPathComponent,date:item.date,hours:retentionHours,now:now){
             guard !editors.contains(where:{$0.item.url==item.url}),item.url.deletingLastPathComponent().standardizedFileURL==folder.standardizedFileURL else{continue}
             do{try FileManager.default.trashItem(at:item.url,resultingItemURL:nil);index.remove(name:item.url.lastPathComponent);captures.removeAll{$0.id==item.id};trayItems.removeAll{$0.id==item.id}}
             catch{report("Could not move an expired capture to Trash; it was retained")}
         }
+        // Rebuilding unchanged previews every minute drops their hover controls.
+        guard trayItems.map(\.id) != trayBefore else{return}
         saveTrayState();showTray()
     }
 
@@ -400,12 +419,70 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             let panel=previewPanels[item.id] ?? NSPanel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
             panel.isOpaque=false;panel.backgroundColor = .clear;panel.hasShadow=true;panel.level = .floating;panel.hidesOnDeactivate=false
             panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]
-            panel.contentView=NSHostingView(rootView:CaptureTrayCard(coordinator:self,item:item).padding(5).background(Color(red:0.10,green:0.12,blue:0.15),in:RoundedRectangle(cornerRadius:14)))
+            let interaction=CapturePreviewInteraction(panel:panel)
+            let menu=previewMenu(item);menu.delegate=interaction;interaction.menu=menu
+            let host=NSHostingView(rootView:CaptureTrayCard(coordinator:self,item:item,interaction:interaction,contextMenu:menu).padding(5).background(Color(red:0.10,green:0.12,blue:0.15),in:RoundedRectangle(cornerRadius:14)))
+            // AppKit owns menu tracking, including clicks on the preview's padding
+            // or action controls. SwiftUI contextMenu can get stuck on a panel
+            // that deliberately never activates the app.
+            host.menu=menu;panel.contentView=host
             panel.setFrame(CGRect(x:visible.minX+18,y:visible.minY+18+CGFloat(i)*140,width:200,height:128),display:true)
             panel.orderFrontRegardless();previewPanels[item.id]=panel
         }
     }
 
+    private func previewMenu(_ item:CaptureItem)->NSMenu {
+        let menu=NSMenu()
+        func add(_ title:String,_ action:@escaping ()->Void){
+            let handler=CapturePreviewMenuAction(action)
+            let entry=NSMenuItem(title:title,action:#selector(CapturePreviewMenuAction.invokeAction),keyEquivalent:"")
+            entry.target=handler;entry.representedObject=handler;menu.addItem(entry)
+        }
+        add("Edit"){[weak self] in self?.openEditor(item)}
+        add("Copy"){[weak self] in self?.copy(item)}
+        add("Keep"){[weak self] in self?.keep(item)}
+        add("Save to…"){[weak self] in self?.saveAs(item)}
+        add("Show in Finder"){[weak self] in self?.reveal(item)}
+        add("Hide preview"){[weak self] in self?.dismiss(item)}
+        return menu
+    }
+
+}
+
+private final class CapturePreviewMenuAction:NSObject {
+    private let action:()->Void
+    init(_ action:@escaping ()->Void){self.action=action}
+    @objc func invokeAction(){action()}
+}
+
+/// Mouse-only monitors require no new permission and never swallow the click.
+/// They clear temporary thumbnail controls when the user returns to another app.
+private final class CapturePreviewInteraction:NSObject,ObservableObject,NSMenuDelegate {
+    @Published var hovering=false
+    weak var menu:NSMenu?
+    private weak var panel:NSPanel?
+    private var menuTracking=false
+    private var outsideMonitor:Any?
+    private var localMonitor:Any?
+    init(panel:NSPanel){
+        self.panel=panel;super.init()
+        let clicks:NSEvent.EventTypeMask=[.leftMouseDown,.rightMouseDown,.otherMouseDown]
+        outsideMonitor=NSEvent.addGlobalMonitorForEvents(matching:clicks){[weak self] _ in self?.dismissActions()}
+        localMonitor=NSEvent.addLocalMonitorForEvents(matching:clicks){[weak self] event in
+            // While the native menu tracks, let AppKit deliver menu-item clicks
+            // and dismiss clicks itself. A global click explicitly cancels it.
+            if let self,!self.menuTracking,event.window !== self.panel {self.dismissActions()}
+            return event
+        }
+    }
+    deinit {
+        menu?.cancelTracking()
+        if let outsideMonitor {NSEvent.removeMonitor(outsideMonitor)}
+        if let localMonitor {NSEvent.removeMonitor(localMonitor)}
+    }
+    func dismissActions(){menu?.cancelTracking();hovering=false}
+    func menuWillOpen(_ menu:NSMenu){menuTracking=true;hovering=false}
+    func menuDidClose(_ menu:NSMenu){menuTracking=false;hovering=false}
 }
 
 private struct RecentCaptureStrip:View {
@@ -425,13 +502,13 @@ private struct RecentCaptureStrip:View {
 private struct CaptureTrayCard:View {
     @ObservedObject var coordinator:CaptureCoordinator
     let item:CaptureItem
-    @State private var hovering=false
-    @State private var selected=false
+    @ObservedObject var interaction:CapturePreviewInteraction
+    let contextMenu:NSMenu
     var body:some View {
         ZStack(alignment:.bottom){
-            CaptureDragPreview(url:item.url,onClick:{selected.toggle()},onOpen:{coordinator.openEditor(item)})
+            CaptureDragPreview(url:item.url,onOpen:{coordinator.openEditor(item)},contextMenu:contextMenu)
                 .frame(width:190,height:118).background(Color.black.opacity(0.2))
-            if hovering || selected {
+            if interaction.hovering {
                 Color.black.opacity(0.48).allowsHitTesting(false)
                 VStack {
                     HStack {
@@ -452,14 +529,29 @@ private struct CaptureTrayCard:View {
                     }
                 }.padding(7)
             }
-        }.frame(width:190,height:118).clipShape(RoundedRectangle(cornerRadius:10)).onHover{hovering=$0}
-        .help("Double-click to open · drag to another app · click for actions")
-        .contextMenu{Button("Edit"){coordinator.openEditor(item)};Button("Copy"){coordinator.copy(item)};Button("Keep"){coordinator.keep(item)};Button("Save to…"){coordinator.saveAs(item)};Button("Show in Finder"){coordinator.reveal(item)};Button("Hide preview"){coordinator.dismiss(item)}}
+        }.frame(width:190,height:118).clipShape(RoundedRectangle(cornerRadius:10)).onHover{interaction.hovering=$0}
+        .help("Double-click to open · drag to another app · hover for actions · right-click for menu")
     }
     private func corner(_ symbol:String,help:String,action:@escaping()->Void)->some View {
         Button(action:action){Image(systemName:symbol).font(.system(size:9,weight:.bold)).foregroundStyle(.black.opacity(0.8)).frame(width:19,height:19).background(.white.opacity(0.85),in:Circle())}.buttonStyle(.plain).help(help).accessibilityLabel(help)
     }
 
+}
+
+/// Capture must not activate the app and raise its dashboard or an existing editor.
+/// A nonactivating panel can receive Escape while the user's app stays active.
+private final class CaptureSelectionPanel: NSPanel {
+    init(frame: CGRect) {
+        super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear
+        hasShadow = false; acceptsMouseMovedEvents = true; hidesOnDeactivate = false
+        // The overlay is fully transparent; without this AppKit passes clicks to the app below.
+        ignoresMouseEvents = false
+        level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    }
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 }
 
 private final class ToolOverlayWindow: NSWindow {
@@ -517,18 +609,24 @@ private final class RegionSelectionView: NSView {
     override func mouseUp(with event: NSEvent) { if let selection { onComplete?(selection) } }
     override func keyDown(with event: NSEvent) { if event.keyCode == 53 { onCancel?() } else { super.keyDown(with: event) } }
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.36).setFill(); bounds.fill()
+        // Keep the screen at its normal brightness. Only the selection outline
+        // and compact help labels are drawn over the underlying app.
+        NSColor.clear.setFill(); bounds.fill(using: .copy)
         if let selection, selection.width > 0, selection.height > 0 {
-            NSColor.clear.setFill(); selection.fill(using: .copy)
-            NSColor.white.setStroke(); let outline = NSBezierPath(rect: selection); outline.lineWidth = 1.5; outline.stroke()
+            let outline = NSBezierPath(rect: selection)
+            NSColor.black.withAlphaComponent(0.75).setStroke(); outline.lineWidth = 3; outline.stroke()
+            NSColor.white.setStroke(); outline.lineWidth = 1; outline.stroke()
             let label = "\(Int(selection.width)) × \(Int(selection.height)) pt"
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white, .backgroundColor: NSColor.black.withAlphaComponent(0.7)]
             (label as NSString).draw(at: CGPoint(x: selection.minX + 5, y: max(5, selection.minY - 23)), withAttributes: attrs)
         }
         let hint = fixedSize == nil ? "Drag to select an area • Escape cancels" : "Move the frame • Click or drag to capture • Escape cancels"
-        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 17, weight: .medium), .foregroundColor: NSColor.white]
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white]
         let size = (hint as NSString).size(withAttributes: attrs)
-        (hint as NSString).draw(at: CGPoint(x: (bounds.width - size.width) / 2, y: bounds.height - 64), withAttributes: attrs)
+        let origin = CGPoint(x: (bounds.width - size.width) / 2, y: bounds.height - 54)
+        NSColor.black.withAlphaComponent(0.75).setFill()
+        NSBezierPath(roundedRect: CGRect(origin: origin, size: size).insetBy(dx: -12, dy: -7), xRadius: 9, yRadius: 9).fill()
+        (hint as NSString).draw(at: origin, withAttributes: attrs)
     }
 }
 

@@ -1,8 +1,18 @@
 # Preview validation
 
-Validation performed on an Apple Silicon Mac running macOS 26.5.1. Test data was synthetic and temporary. No real microphone recording or real Send button was used in these tests. These results describe specific checks, not complete application acceptance.
+Validation performed on an Apple Silicon Mac running macOS 26.5.1. Test speech and images were synthetic. These results describe specific checks on different builds, not complete application acceptance. No real Send button was exercised.
 
-## Repaired DMG candidate
+## Release 0.3.0 — 23 October 2026
+
+- 208 Python tests and the native library, organizer, editor (17), voice-settings, recording and meeting-audio harnesses pass with isolated synthetic data.
+- Updater checks (10) use local DMGs and temporary folders: only a notarized DMG from this repository, signed by the same team and newer than the installed app, is accepted; a different developer, an older version and an un-notarized DMG are refused; the swap step replaces the app, keeps the previous version and relaunches.
+- Dictation delivery was exercised in real use on the development Mac in Chrome and an Electron chat app, including editors that report an empty box as a single line break and apps that temporarily stop reporting their focused text box. Exact-match verification gates automatic Send and correction watching; recognition alone is not counted as delivery.
+- Drawing tool shortcuts are registered only while drawing is on. Capture, menu-bar and Shortcuts-settings changes were inspected in the running app.
+- Not yet validated: clean-account first launch, macOS 14 hardware, a second Mac, and every application's text fields.
+
+The tests below document earlier packages and isolated component runs. Their results do not automatically apply to a changed binary.
+
+## Earlier repaired DMG — superseded
 
 - 151 Python tests passed with isolated test data, including long-audio chunking, recovery on recognition/database failure, shared wake-prefix routing, runtime resource paths and OpenToolkit migration.
 - 12 native settings checks verified the renamed default, preservation of custom wake phrases and settings, and saving/reloading the migration. The app and helper retain their original bundle identifiers and data paths.
@@ -43,14 +53,14 @@ The native library/organizer harnesses compile with `Sources/LibraryDatabase.swi
 
 - A clean second Mac and the minimum macOS 14 release. Screen recording with microphone requires macOS 15+.
 - Real inference for every offered Whisper size, or performance under competing GPU workloads. Recommendations are heuristics.
-- End-to-end onboarding permission attribution for the new OpenToolkit speech helper; the original app's permissions do not transfer automatically.
-- Visual acceptance of the new Setup controls: the native UI inspection connection failed. The app launched, but this was not a successful visual check.
+- First-time permission attribution and onboarding on a clean user account, plus upgrades between distributable signed releases. Existing-user local testing is not a clean-install test.
+- Text insertion in the actual foreground browser/native field, including focus changes, live replacement and correction detection. Recognition/history success alone is insufficient.
 - Every application's editable text field, Send button, caret and drag/drop handling. Accessibility support varies.
-- Notarization of subsequent development builds, Intel Macs, automatic updates, and full fresh-device acceptance of the packaged app.
+- Intel Macs and full fresh-device acceptance of the packaged app.
 
 This is a current-development snapshot, not a claim that every idea on the roadmap is finished. Deferred: semantic Notes search, cloud sync and a camera overlay. The new local AI writing integration needs real-model and microphone acceptance testing.
 
-## New editor and command flow (development, not installed)
+## Editor and command flow — earlier isolated development checks
 
 - 166 Python tests passed with temporary data. Added wake-window expiry/epoch/single-use routing, localhost-only AI HTTP, refusal of remote URLs/redirects, original/draft persistence, failure cancelling Send, and typing during inference cancelling automatic paste. AI capture does not queue live-preview inference.
 - 12 native settings checks passed. Existing custom prefixes, action phrases, and recovery settings survive migration to the new default.

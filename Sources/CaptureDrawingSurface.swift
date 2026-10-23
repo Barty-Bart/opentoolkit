@@ -317,6 +317,8 @@ final class DrawingSurface: NSView, NSTextFieldDelegate {
         let scale = NSAffineTransform(); scale.scaleX(by: pixelSize.width / image.size.width, yBy: pixelSize.height / image.size.height); scale.concat()
         for mark in marks { drawMark(mark) }
         context.flushGraphics(); NSGraphicsContext.restoreGraphicsState()
+        // Keep the point size so Retina captures stay 144 dpi instead of doubling in other apps.
+        bitmap.size = image.size
         guard let data = bitmap.representation(using: .png, properties: [:]) else { throw NSError(domain: "CaptureTools", code: 2, userInfo: [NSLocalizedDescriptionKey: "Cannot encode this screenshot"]) }
         return data
     }

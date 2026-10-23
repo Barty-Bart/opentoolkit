@@ -14,10 +14,11 @@ struct CaptureDragPreview:NSViewRepresentable {
     let url:URL
     var onClick:(()->Void)?
     var onOpen:(()->Void)?
+    var contextMenu:NSMenu?
     func makeNSView(context:Context)->CaptureDragImageView {CaptureDragImageView()}
     func updateNSView(_ view:CaptureDragImageView,context:Context) {
         view.url=url;view.image=captureThumbnail(url,maxPixels:420)
-        view.onClick=onClick;view.onOpen=onOpen
+        view.onClick=onClick;view.onOpen=onOpen;view.menu=contextMenu
     }
 }
 final class CaptureDragImageView:NSView,NSDraggingSource {
@@ -27,6 +28,7 @@ final class CaptureDragImageView:NSView,NSDraggingSource {
     var onOpen:(()->Void)?
     private var origin=CGPoint.zero
     private var dragging=false
+    private var contextClick=false
     override init(frame:NSRect) {super.init(frame:frame);setAccessibilityElement(true);setAccessibilityRole(.image);setAccessibilityLabel("Screenshot preview. Drag to another app or double-click to edit.")}
     required init?(coder:NSCoder){fatalError()}
     override func draw(_ dirtyRect:NSRect) {
@@ -36,11 +38,19 @@ final class CaptureDragImageView:NSView,NSDraggingSource {
         NSGraphicsContext.current?.imageInterpolation = .high
         image.draw(in:CGRect(x:bounds.midX-size.width/2,y:bounds.midY-size.height/2,width:size.width,height:size.height))
     }
-    override func mouseDown(with event:NSEvent){origin=convert(event.locationInWindow,from:nil);dragging=false}
-    override func mouseUp(with event:NSEvent){guard !dragging else{return};if event.clickCount>=2 {onOpen?()}else{onClick?()}}
+    override func mouseDown(with event:NSEvent){
+        contextClick=event.modifierFlags.contains(.control) && menu != nil
+        if contextClick {rightMouseDown(with:event);return}
+        origin=convert(event.locationInWindow,from:nil);dragging=false
+    }
+    override func mouseUp(with event:NSEvent){guard !dragging,!contextClick else{return};if event.clickCount>=2 {onOpen?()}else{onClick?()}}
+    override func rightMouseDown(with event:NSEvent){
+        guard let menu else{super.rightMouseDown(with:event);return}
+        NSMenu.popUpContextMenu(menu,with:event,for:self)
+    }
     override func mouseDragged(with event:NSEvent){
         let point=convert(event.locationInWindow,from:nil)
-        guard !dragging,hypot(point.x-origin.x,point.y-origin.y)>4,let url,let item=captureDragItem(url:url),let image else{return}
+        guard !contextClick,!dragging,hypot(point.x-origin.x,point.y-origin.y)>4,let url,let item=captureDragItem(url:url),let image else{return}
         dragging=true
         let drag=NSDraggingItem(pasteboardWriter:item)
         let scale=min(bounds.width/max(image.size.width,1),bounds.height/max(image.size.height,1))
