@@ -568,7 +568,8 @@ struct ContinuousView:View {
     }
     /// Menu-bar ⌘, sized like other menu-bar icons (the default symbol size looked small).
     static func menuBarSymbol()->NSImage? {
-        let image=NSImage(systemSymbolName:"command",accessibilityDescription:"OpenToolkit")?.withSymbolConfiguration(.init(pointSize:16,weight:.semibold))
+        // 14 pt regular matches the system's menu-bar icons; 16 pt semibold was clipped at the top and bottom.
+        let image=NSImage(systemSymbolName:"command",accessibilityDescription:"OpenToolkit")?.withSymbolConfiguration(.init(pointSize:14,weight:.regular))
         image?.isTemplate=true;return image
     }
     private let pointerGlow=PointerGlow()
