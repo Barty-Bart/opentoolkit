@@ -44,18 +44,46 @@ final class CaptureExportHandle: NSView, NSDraggingSource {
     func ignoreModifierKeys(for session: NSDraggingSession) -> Bool { true }
 }
 
+/// What each editor tool is called, its key, and a one-line hint shown when it is chosen.
+struct EditorToolInfo {
+    let tool: DrawingTool
+    let symbol: String
+    let name: String
+    let key: String
+    let hint: String
+    var tooltip: String { "\(name) (\(key))\n\(hint)" }
+    static let all: [EditorToolInfo] = [
+        EditorToolInfo(tool: .select, symbol: "cursorarrow", name: "Select", key: "V", hint: "Click a mark or image to select it, drag to move it. Drag the canvas edges to resize the canvas."),
+        EditorToolInfo(tool: .crop, symbol: "crop", name: "Crop image", key: "C", hint: "Drag over an image to crop it. Return applies, Escape cancels."),
+        EditorToolInfo(tool: .pen, symbol: "scribble.variable", name: "Pen", key: "P", hint: "Draw freehand."),
+        EditorToolInfo(tool: .line, symbol: "line.diagonal", name: "Line", key: "L", hint: "Drag to draw a straight line."),
+        EditorToolInfo(tool: .arrow, symbol: "arrow.up.right", name: "Arrow", key: "A", hint: "Drag from the tail to the point."),
+        EditorToolInfo(tool: .rectangle, symbol: "rectangle", name: "Rectangle", key: "R", hint: "Drag to outline an area."),
+        EditorToolInfo(tool: .filledRectangle, symbol: "rectangle.fill", name: "Filled box", key: "F", hint: "Drag to cover an area with the current colour."),
+        EditorToolInfo(tool: .ellipse, symbol: "circle", name: "Oval", key: "O", hint: "Drag to circle something."),
+        EditorToolInfo(tool: .text, symbol: "textformat", name: "Text", key: "T", hint: "Click where the label goes, type, then Return."),
+        EditorToolInfo(tool: .highlighter, symbol: "highlighter", name: "Highlighter", key: "H", hint: "Drag across text to highlight whole words and lines. Hold Option (⌥) to draw freehand."),
+        EditorToolInfo(tool: .number, symbol: "1.circle.fill", name: "Counter", key: "N", hint: "Click to place numbered steps: 1, 2, 3…"),
+        EditorToolInfo(tool: .redact, symbol: "eye.slash", name: "Redact", key: "X", hint: "Drag to hide sensitive details under a solid black box."),
+        EditorToolInfo(tool: .eraser, symbol: "eraser", name: "Eraser", key: "E", hint: "Click or drag over a mark to remove it."),
+    ]
+}
+
 @MainActor
 final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
     let item: CaptureItem
     let surface: DrawingSurface
     private let scroll = NSScrollView()
     private let toolPicker = NSSegmentedControl()
-    private let zoomPicker = NSPopUpButton()
+    private let toolName = NSTextField(labelWithString: "")
+    private let zoomPicker = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let canvasPicker = NSPopUpButton(frame: .zero, pullsDown: true)
     private let cropActions = NSStackView()
     private let statusLabel = NSTextField(labelWithString: "")
     private let pinButton = NSButton()
     private var viewportObserver: NSObjectProtocol?
-    private let editorTools: [(DrawingTool, String)] = [(.select,"cursorarrow"),(.crop,"crop"),(.pen,"pencil.tip"),(.line,"line.diagonal"),(.arrow,"arrow.up.right"),(.rectangle,"rectangle"),(.filledRectangle,"rectangle.fill"),(.ellipse,"circle"),(.text,"textformat"),(.highlighter,"highlighter"),(.number,"1.circle"),(.redact,"rectangle.inset.filled"),(.eraser,"eraser")]
+    private let editorTools = EditorToolInfo.all
+    private let zoomLevels: [CGFloat?] = [nil, 0.25, 0.5, 0.75, 1, 1.5, 2, 4]
     var onStatus: ((String) -> Void)?
     var onSaved: (() -> Void)?
     var onClose: (() -> Void)?
@@ -63,12 +91,12 @@ final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToo
     init(item: CaptureItem, image: NSImage) {
         self.item = item
         surface = DrawingSurface(frame: NSRect(x: 0, y: 0, width: 1000, height: 650), image: image)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 760), styleMask: [.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 760), styleMask: [.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Screenshot — OpenToolkit"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unifiedCompact
-        window.minSize = NSSize(width: 820, height: 440)
+        window.minSize = NSSize(width: 860, height: 440)
         window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)
@@ -77,7 +105,13 @@ final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToo
         surface.onEscape = { [weak self] in self?.window?.performClose(nil) }
         surface.onStatus = { [weak self] in self?.report($0) }
         surface.onChange = { [weak self] in self?.changed() }
-        surface.onToolChange = { [weak self] in self?.syncTools() }
+        surface.onToolChange = { [weak self] in self?.syncTools(announce: true) }
+        surface.onMagnify = { [weak self] factor, point in guard let self else { return }; self.zoom(to: self.surface.viewScale * factor, anchor: point) }
+        surface.onSmartMagnify = { [weak self] point in guard let self else { return }; self.zoom(to: self.surface.zoomScale == nil ? 1 : nil, anchor: point) }
+        surface.onZoomCommand = { [weak self] key in
+            guard let self else { return }
+            switch key { case "0": self.zoom(to: nil); case "1": self.zoom(to: 1); case "-": self.zoom(to: self.surface.viewScale / 1.25); default: self.zoom(to: self.surface.viewScale * 1.25) }
+        }
         let toolbar = NSToolbar(identifier: "OpenToolkit.CaptureEditor")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
@@ -85,7 +119,8 @@ final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToo
         window.toolbar = toolbar
         makeContent(window)
         window.makeFirstResponder(surface)
-        syncTools()
+        syncTools(announce: false)
+        report("Pinch to zoom. Drag the canvas edges to make room; drop or paste images to add them as layers.")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit { if let viewportObserver { NotificationCenter.default.removeObserver(viewportObserver) } }
@@ -109,9 +144,18 @@ final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToo
         }
         let footer = NSVisualEffectView()
         footer.material = .headerView; footer.blendingMode = .withinWindow; footer.state = .active
-        zoomPicker.addItems(withTitles: ["Fit", "25%", "50%", "75%", "100%", "150%", "200%"])
+        zoomPicker.addItem(withTitle: "Fit")
+        zoomPicker.addItems(withTitles: ["Zoom to fit  ⌘0", "25%", "50%", "75%", "Actual size  ⌘1", "150%", "200%", "400%"])
         zoomPicker.target = self; zoomPicker.action = #selector(changeZoom)
-        zoomPicker.toolTip = "Canvas zoom — exported image keeps its original resolution"
+        zoomPicker.toolTip = "Zoom: pinch on the trackpad, ⌘+ and ⌘−, ⌘0 to fit. Two fingers scroll around. Export keeps full resolution."
+        canvasPicker.addItem(withTitle: "Canvas")
+        for (title, tag) in [("Fit canvas to images", 1), ("Add 40 pt of room", 2), ("Add 120 pt of room", 3)] { canvasPicker.addItem(withTitle: title); canvasPicker.lastItem?.tag = tag }
+        canvasPicker.menu?.addItem(.separator())
+        for background in CanvasBackground.allCases { canvasPicker.addItem(withTitle: "Background: " + background.title); canvasPicker.lastItem?.tag = 10 + background.rawValue }
+        canvasPicker.menu?.addItem(.separator())
+        canvasPicker.addItem(withTitle: "Grow canvas when images move outside"); canvasPicker.lastItem?.tag = 20
+        canvasPicker.target = self; canvasPicker.action = #selector(canvasAction(_:))
+        canvasPicker.toolTip = "Canvas size and background. With the Select tool, drag the canvas edges to grow or shrink it."
         let drag = CaptureExportHandle()
         drag.render = { [weak self] in guard let self else { throw CocoaError(.fileReadUnknown) }; return try self.surface.renderedPNG() }
         drag.onStatus = { [weak self] in self?.report($0) }
@@ -122,7 +166,7 @@ final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToo
         pinButton.bezelStyle = .texturedRounded; pinButton.setButtonType(.toggle)
         pinButton.target = self; pinButton.action = #selector(togglePin)
         pinButton.toolTip = "Keep editor on top"; pinButton.setAccessibilityLabel("Keep editor on top")
-        let more = iconButton("ellipsis.circle", "More image actions", #selector(moreActions(_:)))
+        let more = iconButton("ellipsis.circle", "More: add images, arrange layers, smart highlighter", #selector(moreActions(_:)))
         let right = NSStackView(views: [share,pinButton,copy,more]); right.spacing = 6
         let apply = NSButton(title: "Apply crop", target: self, action: #selector(applyCrop))
         apply.bezelStyle = .rounded
@@ -132,63 +176,112 @@ final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToo
         statusLabel.font = .systemFont(ofSize: 11); statusLabel.textColor = .secondaryLabelColor; statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setContentCompressionResistancePriority(.defaultLow,for:.horizontal)
         for view in [scroll,footer] { view.translatesAutoresizingMaskIntoConstraints=false;container.addSubview(view) }
-        for view in [zoomPicker,drag,right,cropActions,statusLabel] { view.translatesAutoresizingMaskIntoConstraints=false;footer.addSubview(view) }
+        for view in [zoomPicker,canvasPicker,drag,right,cropActions,statusLabel] { view.translatesAutoresizingMaskIntoConstraints=false;footer.addSubview(view) }
         let guide = window.contentLayoutGuide as! NSLayoutGuide
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: guide.topAnchor),scroll.leadingAnchor.constraint(equalTo:container.leadingAnchor),scroll.trailingAnchor.constraint(equalTo:container.trailingAnchor),scroll.bottomAnchor.constraint(equalTo:footer.topAnchor),
             footer.heightAnchor.constraint(equalToConstant:50),footer.leadingAnchor.constraint(equalTo:container.leadingAnchor),footer.trailingAnchor.constraint(equalTo:container.trailingAnchor),footer.bottomAnchor.constraint(equalTo:container.bottomAnchor),
-            zoomPicker.leadingAnchor.constraint(equalTo:footer.leadingAnchor,constant:12),zoomPicker.centerYAnchor.constraint(equalTo:footer.centerYAnchor),zoomPicker.widthAnchor.constraint(equalToConstant:84),
+            zoomPicker.leadingAnchor.constraint(equalTo:footer.leadingAnchor,constant:12),zoomPicker.centerYAnchor.constraint(equalTo:footer.centerYAnchor),zoomPicker.widthAnchor.constraint(equalToConstant:96),
+            canvasPicker.leadingAnchor.constraint(equalTo:zoomPicker.trailingAnchor,constant:8),canvasPicker.centerYAnchor.constraint(equalTo:footer.centerYAnchor),canvasPicker.widthAnchor.constraint(equalToConstant:172),
             drag.centerXAnchor.constraint(equalTo:footer.centerXAnchor),drag.centerYAnchor.constraint(equalTo:footer.centerYAnchor),drag.widthAnchor.constraint(equalToConstant:116),drag.heightAnchor.constraint(equalToConstant:28),
             right.trailingAnchor.constraint(equalTo:footer.trailingAnchor,constant:-12),right.centerYAnchor.constraint(equalTo:footer.centerYAnchor),
-            cropActions.leadingAnchor.constraint(equalTo:zoomPicker.trailingAnchor,constant:12),cropActions.centerYAnchor.constraint(equalTo:footer.centerYAnchor),
-            statusLabel.leadingAnchor.constraint(equalTo:zoomPicker.trailingAnchor,constant:12),statusLabel.trailingAnchor.constraint(lessThanOrEqualTo:drag.leadingAnchor,constant:-16),statusLabel.centerYAnchor.constraint(equalTo:footer.centerYAnchor)
+            cropActions.leadingAnchor.constraint(equalTo:canvasPicker.trailingAnchor,constant:12),cropActions.centerYAnchor.constraint(equalTo:footer.centerYAnchor),
+            statusLabel.leadingAnchor.constraint(equalTo:canvasPicker.trailingAnchor,constant:12),statusLabel.trailingAnchor.constraint(lessThanOrEqualTo:drag.leadingAnchor,constant:-16),statusLabel.centerYAnchor.constraint(equalTo:footer.centerYAnchor)
         ])
         container.layoutSubtreeIfNeeded();layoutCanvas()
     }
     func windowDidResize(_ notification: Notification) { layoutCanvas() }
     private func layoutCanvas() {
-        let viewport=scroll.contentView.bounds.size
-        let size=surface.image?.size ?? viewport
-        let factor=surface.zoomScale
-        let desired=NSSize(width:max(viewport.width,factor.map{size.width*$0+40} ?? 0),height:max(viewport.height,factor.map{size.height*$0+40} ?? 0))
+        let desired=surface.documentViewSize(viewport:scroll.contentView.bounds.size)
         if surface.frame.size != desired {surface.setFrameSize(desired)}
         surface.needsDisplay=true
+        syncLabels()
+    }
+    /// Zooms around a window point (the pinch centre) so the content under the fingers stays put.
+    func zoom(to scale: CGFloat?, anchor windowPoint: NSPoint? = nil) {
+        let clip = scroll.contentView
+        let anchor = windowPoint.map { clip.convert($0, from: nil) } ?? NSPoint(x: clip.bounds.midX, y: clip.bounds.midY)
+        let offset = NSPoint(x: anchor.x - clip.bounds.minX, y: anchor.y - clip.bounds.minY)
+        let documentAnchor = surface.documentPoint(surface.convert(anchor, from: clip))
+        surface.zoomScale = scale.map { min(8, max(0.05, $0)) }
+        layoutCanvas()
+        let moved = clip.convert(surface.viewPoint(documentAnchor), from: surface)
+        let origin = clip.constrainBoundsRect(NSRect(origin: NSPoint(x: moved.x - offset.x, y: moved.y - offset.y), size: clip.bounds.size)).origin
+        clip.setBoundsOrigin(origin); scroll.reflectScrolledClipView(clip)
+        surface.needsDisplay = true
+    }
+    private func syncLabels() {
+        let percent = Int((surface.viewScale * 100).rounded())
+        zoomPicker.item(at: 0)?.title = surface.zoomScale == nil ? "Fit · \(percent)%" : "\(percent)%"
+        canvasPicker.item(at: 0)?.title = "Canvas \(Int(surface.canvas.width)) × \(Int(surface.canvas.height))"
+        for item in canvasPicker.itemArray {
+            if item.tag >= 10 && item.tag < 20 { item.state = item.tag - 10 == surface.canvasBackground.rawValue ? .on : .off }
+            if item.tag == 20 { item.state = surface.growsCanvasForMovedImages ? .on : .off }
+        }
     }
     private func changed() { window?.isDocumentEdited=surface.hasChanges;cropActions.isHidden = !surface.hasPendingCrop;statusLabel.isHidden=surface.hasPendingCrop;layoutCanvas() }
-    private func syncTools() { toolPicker.selectedSegment=editorTools.firstIndex(where:{$0.0==surface.tool}) ?? 0 }
+    private func syncTools(announce: Bool) {
+        let index = editorTools.firstIndex(where:{$0.tool==surface.tool}) ?? 0
+        toolPicker.selectedSegment=index
+        toolName.stringValue = "\(editorTools[index].name)  \(editorTools[index].key)"
+        toolName.toolTip = editorTools[index].hint
+        if announce { report(editorTools[index].hint) }
+    }
     private func report(_ text: String) { statusLabel.stringValue=text;statusLabel.toolTip=text;onStatus?(text) }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { ["tools","color","width","textSize","undo","redo"].map{NSToolbarItem.Identifier($0)} + [.flexibleSpace] + ["saveAs","done"].map{NSToolbarItem.Identifier($0)} }
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { ["tools","toolName","color","width","textSize","undo","redo"].map{NSToolbarItem.Identifier($0)} + [.flexibleSpace] + ["saveAs","done"].map{NSToolbarItem.Identifier($0)} }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar: Bool) -> NSToolbarItem? {
         let item=NSToolbarItem(itemIdentifier:id)
+        func symbolPopUp(_ titles:[String],_ symbol:String,_ selected:String,_ action:Selector,_ tip:String)->NSPopUpButton {
+            let control=NSPopUpButton();control.addItems(withTitles:titles);control.selectItem(withTitle:selected);control.target=self;control.action=action;control.toolTip=tip
+            let image=NSImage(systemSymbolName:symbol,accessibilityDescription:tip);control.itemArray.forEach{$0.image=image};control.imagePosition = .imageLeading
+            return control
+        }
         switch id.rawValue {
         case "tools":
             toolPicker.segmentCount=editorTools.count;toolPicker.trackingMode = .selectOne;toolPicker.segmentStyle = .rounded
-            for (index,entry) in editorTools.enumerated() {toolPicker.setImage(NSImage(systemSymbolName:entry.1,accessibilityDescription:entry.0.title),forSegment:index);toolPicker.setWidth(27,forSegment:index);toolPicker.setToolTip(entry.0.title,forSegment:index)}
+            for (index,entry) in editorTools.enumerated() {toolPicker.setImage(NSImage(systemSymbolName:entry.symbol,accessibilityDescription:entry.name),forSegment:index);toolPicker.setWidth(28,forSegment:index);toolPicker.setToolTip(entry.tooltip,forSegment:index)}
             toolPicker.target=self;toolPicker.action=#selector(changeTool);toolPicker.selectedSegment=0;item.view=toolPicker;item.label="Editing tools"
+        case "toolName":
+            // The chosen tool in words, so the icons never have to be guessed.
+            toolName.font = .systemFont(ofSize:12,weight:.semibold);toolName.textColor = .secondaryLabelColor;toolName.alignment = .left
+            toolName.widthAnchor.constraint(equalToConstant:104).isActive=true
+            item.view=toolName;item.label="Current tool"
         case "color":
-            let well=NSColorWell();well.color=surface.color;well.colorWellStyle = .minimal;well.target=self;well.action=#selector(changeColor(_:));well.frame=NSRect(x:0,y:0,width:32,height:28);item.view=well;item.label="Color";item.toolTip="Annotation color"
+            let well=NSColorWell();well.color=surface.color;well.colorWellStyle = .minimal;well.target=self;well.action=#selector(changeColor(_:));well.frame=NSRect(x:0,y:0,width:32,height:28);item.view=well;item.label="Colour";item.toolTip="Colour for new marks and the selected mark"
         case "width":
-            let control=NSPopUpButton();control.addItems(withTitles:["2 pt","4 pt","6 pt","10 pt","16 pt"]);control.selectItem(at:1);control.target=self;control.action=#selector(changeWidth(_:));item.view=control;item.label="Stroke width"
+            item.view=symbolPopUp(["2 pt","4 pt","6 pt","10 pt","16 pt"],"lineweight","4 pt",#selector(changeWidth(_:)),"Line width for pens, shapes and arrows");item.label="Line width"
         case "textSize":
-            let control=NSPopUpButton();control.addItems(withTitles:["12","16","20","24","32","48","64"]);control.selectItem(withTitle:"24");control.target=self;control.action=#selector(changeTextSize(_:));item.view=control;item.label="Text size"
+            item.view=symbolPopUp(["12","16","20","24","32","48","64"],"textformat.size","24",#selector(changeTextSize(_:)),"Text and counter size");item.label="Text size"
         case "undo": item.view=iconButton("arrow.uturn.backward","Undo (⌘Z)",#selector(undoEdit));item.label="Undo"
         case "redo": item.view=iconButton("arrow.uturn.forward","Redo (⇧⌘Z)",#selector(redoEdit));item.label="Redo"
         case "saveAs":
-            let button=NSButton(title:"Save as…",target:self,action:#selector(exportImage));button.bezelStyle = .rounded;button.keyEquivalent="s";button.keyEquivalentModifierMask=[.command,.shift];item.view=button;item.label="Save as…"
+            let button=NSButton(title:"Save as…",target:self,action:#selector(exportImage));button.bezelStyle = .rounded;button.keyEquivalent="s";button.keyEquivalentModifierMask=[.command,.shift];button.toolTip="Export a copy as a PNG file (⇧⌘S)";item.view=button;item.label="Save as…"
         case "done":
-            let button=NSButton(title:"Done",target:self,action:#selector(done));button.bezelStyle = .rounded;button.bezelColor = .controlAccentColor;button.keyEquivalent="s";button.keyEquivalentModifierMask=[.command];item.view=button;item.label="Done";item.toolTip="Save edits in screenshot history and close"
+            let button=NSButton(title:"Done",target:self,action:#selector(done));button.bezelStyle = .rounded;button.bezelColor = .controlAccentColor;button.keyEquivalent="s";button.keyEquivalentModifierMask=[.command];button.toolTip="Save edits in screenshot history and close (⌘S)";item.view=button;item.label="Done";item.toolTip="Save edits in screenshot history and close"
         default:return nil
         }
         if let view=item.view {view.setAccessibilityLabel(item.label)}
         return item
     }
-    @objc private func changeTool() { let index=toolPicker.selectedSegment;guard editorTools.indices.contains(index) else{return};surface.finishStroke();surface.tool=editorTools[index].0;window?.makeFirstResponder(surface) }
+    @objc private func changeTool() { let index=toolPicker.selectedSegment;guard editorTools.indices.contains(index) else{return};surface.finishStroke();surface.tool=editorTools[index].tool;window?.makeFirstResponder(surface) }
     @objc private func changeColor(_ sender:NSColorWell) { surface.changeSelectedColor(sender.color) }
     @objc private func changeWidth(_ sender:NSPopUpButton) { surface.changeSelectedWidth([2,4,6,10,16][sender.indexOfSelectedItem]) }
     @objc private func changeTextSize(_ sender:NSPopUpButton) { surface.textSize=CGFloat(Double(sender.titleOfSelectedItem ?? "24") ?? 24) }
-    @objc private func changeZoom() { let scales:[CGFloat?]=[nil,0.25,0.5,0.75,1,1.5,2];surface.zoomScale=scales[zoomPicker.indexOfSelectedItem];layoutCanvas() }
+    @objc private func changeZoom() { let index=zoomPicker.indexOfSelectedItem-1;guard zoomLevels.indices.contains(index) else{return};zoom(to:zoomLevels[index]);window?.makeFirstResponder(surface) }
+    @objc private func canvasAction(_ sender:NSPopUpButton) {
+        guard let tag=sender.selectedItem?.tag else{return}
+        switch tag {
+        case 1:surface.fitCanvasToImages()
+        case 2:surface.padCanvas(40)
+        case 3:surface.padCanvas(120)
+        case 10..<20:surface.canvasBackground=CanvasBackground(rawValue:tag-10) ?? .auto
+        case 20:surface.growsCanvasForMovedImages.toggle()
+        default:break
+        }
+        layoutCanvas();window?.makeFirstResponder(surface)
+    }
     @objc private func applyCrop() {surface.applyCrop()}
     @objc private func cancelCrop() {surface.cancelCrop()}
     @objc private func undoEdit() {surface.undo()}
@@ -202,13 +295,23 @@ final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToo
     }
     @objc private func moreActions(_ sender:NSButton) {
         let menu=NSMenu()
-        for (title,selector) in [("Add images…",#selector(addImages)),("Stack vertically",#selector(stackVertically)),("Join horizontally",#selector(joinHorizontally)),("Delete selected annotation",#selector(deleteSelected)),("Clear annotations",#selector(clearAnnotations))] {
+        for (title,selector) in [("Add images…",#selector(addImages)),("Place new images below",#selector(stackVertically)),("Place new images to the right",#selector(joinHorizontally))] {
             let item=NSMenuItem(title:title,action:selector,keyEquivalent:"");item.target=self;menu.addItem(item)
         }
+        menu.items[1].state = surface.combineHorizontal ? .off:.on;menu.items[2].state = surface.combineHorizontal ? .on:.off
+        menu.addItem(.separator())
+        for (title,selector) in [("Bring selected image to front",#selector(bringToFront)),("Send selected image to back",#selector(sendToBack)),("Delete selection",#selector(deleteSelected)),("Clear annotations",#selector(clearAnnotations))] {
+            let item=NSMenuItem(title:title,action:selector,keyEquivalent:"");item.target=self;menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let smart=NSMenuItem(title:"Highlighter snaps to text",action:#selector(toggleSmartHighlight),keyEquivalent:"");smart.target=self;smart.state=surface.smartHighlight ? .on:.off;menu.addItem(smart)
         menu.popUp(positioning:nil,at:NSPoint(x:0,y:sender.bounds.height),in:sender)
     }
-    @objc private func stackVertically(){surface.combineHorizontal=false;report("Drop images to stack vertically.")}
-    @objc private func joinHorizontally(){surface.combineHorizontal=true;report("Drop images to join horizontally.")}
+    @objc private func stackVertically(){surface.combineHorizontal=false;report("New images go below. Drop, paste or add them, then drag to place.")}
+    @objc private func joinHorizontally(){surface.combineHorizontal=true;report("New images go to the right. Drop, paste or add them, then drag to place.")}
+    @objc private func bringToFront(){surface.arrangeSelectedLayer(toFront:true)}
+    @objc private func sendToBack(){surface.arrangeSelectedLayer(toFront:false)}
+    @objc private func toggleSmartHighlight(){surface.smartHighlight.toggle();report(surface.smartHighlight ? "The highlighter snaps to text. Hold Option (⌥) for freehand.":"The highlighter draws freehand.")}
     @objc private func deleteSelected(){surface.deleteSelection()}
     @objc private func clearAnnotations(){surface.clear()}
     @objc private func shareImage(_ sender:NSButton) {

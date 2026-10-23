@@ -47,7 +47,10 @@ bash Tests/run-recording-tests.sh
 bash Tests/run-meeting-audio-tests.sh
 bash Tests/run-usage-log-tests.sh
 bash Tests/run-home-stats-tests.sh
+bash Tests/run-capture-editor-tests.sh
 ```
+
+The screenshot editor harness checks canvas sizing and background, image layers, crop, zoom mapping and smart-highlight geometry, and runs on-device Vision text recognition on a synthetic image. `bash Tests/run-capture-editor-tests.sh --snapshots <folder>` drives the real editor window with synthetic mouse events and saves window images for review; view caching leaves the title-bar toolbar blank, so the tool strip and tooltips are saved separately as `00-tool-guide.png`.
 
 The native library/organizer harnesses compile with `Sources/LibraryDatabase.swift` and `Sources/OrganizerTools.swift`; each corresponding `Tests/*Tests.swift` is its own executable. The recommendation harness uses only `Sources/SpeechRecommendation.swift`.
 
