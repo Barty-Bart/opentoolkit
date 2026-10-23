@@ -163,7 +163,9 @@ final class RecordingCoordinator: NSObject, ObservableObject {
     // The application delegate can await this before exiting so the MP4 is finalized.
     func finishBeforeQuit() async {
         stop()
-        while isBusy { try? await Task.sleep(nanoseconds: 100_000_000) }
+        // Bounded: quitting (and updating) must not wait forever on a stuck recording.
+        let deadline = Date().addingTimeInterval(15)
+        while isBusy && Date() < deadline { try? await Task.sleep(nanoseconds: 100_000_000) }
     }
 
     private func showControl(on screen: NSScreen) {

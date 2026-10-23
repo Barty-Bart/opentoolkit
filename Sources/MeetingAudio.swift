@@ -99,7 +99,9 @@ final class MeetingAudioCapture: NSObject, ObservableObject {
 
     func finishBeforeQuit() async {
         stop()
-        while isBusy { try? await Task.sleep(nanoseconds: 100_000_000) }
+        // Bounded: quitting (and updating) must not wait forever on a stuck capture.
+        let deadline = Date().addingTimeInterval(15)
+        while isBusy && Date() < deadline { try? await Task.sleep(nanoseconds: 100_000_000) }
     }
 
     private func finish(message: String) {

@@ -118,9 +118,14 @@ private final class DownloadProgress: NSObject, URLSessionDownloadDelegate {
                 if let reason = busyReason() { try? FileManager.default.removeItem(at: staged); throw UpdateFailure(message: reason) }
                 try launchSwap(staged)
                 message = "Restarting OpenToolkit…"
-                NSApp.terminate(nil)
-                // If quitting was cancelled (for example an unsaved editor), the swap script gives up and keeps this app.
+                // Quit from the run loop, never from inside this task: AppKit's terminate waits for
+                // applicationShouldTerminate's reply, which needs the main actor this task is holding.
+                NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0.1)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                // Still running: quitting was cancelled (for example an editor with unsaved changes).
+                // The swap step gives up after a minute and this app stays as it is.
                 installing = false
+                message = "OpenToolkit couldn't restart. Save or close open screenshot editors, then click Download & install again."
             } catch {
                 installing = false
                 message = "Update not installed: \(error.localizedDescription) Your current app is unchanged."
