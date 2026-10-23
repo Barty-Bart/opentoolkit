@@ -24,6 +24,7 @@ struct CaptureOptionsView:View {
                     .toggleStyle(GlassToggleStyle()).help("Lock the frame to exact dimensions")
                 Toggle(isOn:$model.includeMic){VStack(spacing:5){Image(systemName:model.includeMic ? "mic.fill":"mic.slash").font(.system(size:18));Text("Mic").font(.system(size:10,weight:.medium))}.frame(width:52,height:52)}
                     .toggleStyle(GlassToggleStyle()).help("Include your microphone in video recordings")
+                CursorEffectsMenu()
                 Divider().frame(height:40).padding(.horizontal,6)
                 Button(action:close){Image(systemName:"xmark").font(.system(size:13,weight:.semibold)).frame(width:30,height:30)}.buttonStyle(GlassButtonStyle()).help("Close (Escape)")
             }

@@ -77,7 +77,46 @@ private func makeSyntheticAudio(channels: Int, frequency: Double, start: CMTime)
 
 @main
 struct RecordingRegressionTests {
+    /// Cursor effects drawn into a synthetic black 400×200 frame showing a 200×100 pt region (2 px per pt).
+    static func cursorOverlayChecks() {
+        func frame() -> CVPixelBuffer {
+            var buffer: CVPixelBuffer?
+            precondition(CVPixelBufferCreate(kCFAllocatorDefault, 400, 200, kCVPixelFormatType_32BGRA, [kCVPixelBufferIOSurfacePropertiesKey as String: [:]] as CFDictionary, &buffer) == kCVReturnSuccess)
+            CVPixelBufferLockBaseAddress(buffer!, []); memset(CVPixelBufferGetBaseAddress(buffer!), 0, CVPixelBufferGetBytesPerRow(buffer!) * 200); CVPixelBufferUnlockBaseAddress(buffer!, [])
+            return buffer!
+        }
+        // BGRA pixel at (x, y) counted from the bottom-left, matching the overlay's coordinates.
+        func pixel(_ b: CVPixelBuffer, _ x: Int, _ y: Int) -> (r: UInt8, g: UInt8, b: UInt8) {
+            CVPixelBufferLockBaseAddress(b, .readOnly); defer { CVPixelBufferUnlockBaseAddress(b, .readOnly) }
+            let row = CVPixelBufferGetBaseAddress(b)!.assumingMemoryBound(to: UInt8.self) + (199 - y) * CVPixelBufferGetBytesPerRow(b)
+            return (row[x * 4 + 2], row[x * 4 + 1], row[x * 4])
+        }
+        let region = CGRect(x: 1000, y: 500, width: 200, height: 100)
+        var snap = CursorTracker.Snapshot(); snap.location = CGPoint(x: 1100, y: 550)  // centre → pixel (200, 100)
+        let ring = frame()
+        CursorOverlay.draw(snap, effects: CursorEffects(scale: 1, highlight: true, colorName: "Red"), region: region, into: ring, now: 10)
+        precondition(pixel(ring, 200, 100).r > 40 && pixel(ring, 200, 100).g < 40, "highlight fills around the pointer")
+        precondition(pixel(ring, 10, 10) == (0, 0, 0), "highlight stays near the pointer")
+        let ripple = frame()
+        snap.clicks = [(CGPoint(x: 1050, y: 525), 9.9), (CGPoint(x: 1150, y: 575), 5)]  // a fresh click and an old one
+        CursorOverlay.draw(snap, effects: CursorEffects(scale: 1, clicks: true, colorName: "White"), region: region, into: ripple, now: 10)
+        let ringRadius = Int(((8 + 28 * (0.1 / CursorOverlay.rippleDuration)) * 2).rounded())
+        precondition(pixel(ripple, 100 + ringRadius, 50).r > 60, "a fresh click draws a ripple at its position")
+        precondition(pixel(ripple, 300, 150) == (0, 0, 0), "expired clicks are not drawn")
+        // A synthetic 10×10 pt white cursor with its hot spot at the top-left corner.
+        let cursorContext = CGContext(data: nil, width: 10, height: 10, bitsPerComponent: 8, bytesPerRow: 40, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        cursorContext.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1)); cursorContext.fill(CGRect(x: 0, y: 0, width: 10, height: 10))
+        var pointer = CursorTracker.Snapshot(); pointer.location = CGPoint(x: 1100, y: 550)
+        pointer.cursor = cursorContext.makeImage(); pointer.cursorSize = CGSize(width: 10, height: 10); pointer.hotSpot = .zero
+        let large = frame()
+        CursorOverlay.draw(pointer, effects: CursorEffects(scale: 2), region: region, into: large, now: 10)
+        // 10 pt × 2 (scale) × 2 px/pt = 40 px, extending right and down from the hot spot.
+        precondition(pixel(large, 238, 62).r > 200 && pixel(large, 242, 100).r == 0 && pixel(large, 238, 58).r == 0, "large cursor is 2× and anchored at its hot spot")
+        print("PASS: cursor highlight, click ripples and large cursor drawn at the right pixels")
+    }
+
     static func main() async throws {
+        cursorOverlayChecks()
         let frame = CGRect(x: -1440, y: 400, width: 1440, height: 900)
         let region = CGRect(x: -1300, y: 900, width: 500, height: 300)
         precondition(RecordingGeometry.sourceRect(region: region, screenFrame: frame) == CGRect(x: 140, y: 100, width: 500, height: 300))

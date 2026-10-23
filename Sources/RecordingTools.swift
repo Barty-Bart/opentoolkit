@@ -4,6 +4,7 @@ import Combine
 @preconcurrency import ScreenCaptureKit
 import CoreMedia
 import CoreVideo
+import QuartzCore
 
 // All coordinates crossing the public boundary use AppKit's global, bottom-left space.
 // Audio/video files belong in the caller's local application-support folder, never source control.
@@ -18,6 +19,7 @@ final class RecordingCoordinator: NSObject, ObservableObject {
 
     private let storage: URL
     private var engine: RecordingEngine?
+    private var cursorTracker: CursorTracker?
     private var preparation: Task<Void, Never>?
     private var timer: Timer?
     private var startedAt: Date?
@@ -104,8 +106,11 @@ final class RecordingCoordinator: NSObject, ObservableObject {
                 let size = RecordingGeometry.encodedSize(region.size, scale: screen.backingScaleFactor)
                 let name = Self.makeFilename()
                 let output = self.storage.appendingPathComponent(name)
+                let effects = CursorEffects.current
+                let tracker = effects.active ? CursorTracker() : nil
+                tracker?.start(); self.cursorTracker = tracker
                 let recorder = try RecordingEngine(output: output, dimensions: size,
-                                                   includeMicrophone: includeMicrophone)
+                                                   includeMicrophone: includeMicrophone, effects: effects, region: region, tracker: tracker)
                 recorder.onFailure = { [weak self] error in
                     Task { @MainActor in
                         guard let self, self.isBusy else { return }
@@ -201,6 +206,7 @@ final class RecordingCoordinator: NSObject, ObservableObject {
         timer?.invalidate(); timer = nil
         control?.close(); control = nil
         engine = nil; preparation = nil; startedAt = nil
+        cursorTracker?.stop(); cursorTracker = nil
         isRecording = false; isBusy = false; stopRequested = false
         setStatus(message)
     }
@@ -281,8 +287,16 @@ private final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate,
     private var systemAudioFrames = 0
     private var micFrames = 0
     var onFailure: ((Error) -> Void)?
+    // Cursor effects are drawn into frames; when active, every frame goes through the adaptor.
+    private let effects: CursorEffects
+    private let region: CGRect
+    private let tracker: CursorTracker?
+    private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private var clean: CVPixelBuffer?
+    private var frameTimer: DispatchSourceTimer?
 
-    init(output: URL, dimensions: CGSize, includeMicrophone: Bool) throws {
+    init(output: URL, dimensions: CGSize, includeMicrophone: Bool, effects: CursorEffects = CursorEffects(), region: CGRect = .zero, tracker: CursorTracker? = nil) throws {
+        self.effects = effects; self.region = region; self.tracker = tracker
         self.output = output
         self.temporary = output.deletingLastPathComponent().appendingPathComponent(".\(output.deletingPathExtension().lastPathComponent).recording.mp4")
         self.dimensions = dimensions
@@ -308,6 +322,13 @@ private final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate,
             AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 96_000
         ]) : nil
         super.init()
+        if effects.active {
+            adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: video, sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: Int(dimensions.width), kCVPixelBufferHeightKey as String: Int(dimensions.height),
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+            ])
+        }
         for input in [video, systemAudio, microphone].compactMap({ $0 }) {
             input.expectsMediaDataInRealTime = true
             guard writer.canAdd(input) else { throw RecordingFailure.message("The MP4 encoder cannot accept the \(input.mediaType.rawValue) format.") }
@@ -327,7 +348,8 @@ private final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate,
                 config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
                 config.queueDepth = 4
                 config.pixelFormat = kCVPixelFormatType_32BGRA
-                config.showsCursor = true
+                // A larger cursor replaces the real one in the video.
+                config.showsCursor = self.effects.scale <= 1
                 config.capturesAudio = true
                 config.sampleRate = 48_000; config.channelCount = 2
                 config.excludesCurrentProcessAudio = true
@@ -342,7 +364,7 @@ private final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate,
                     }
                     stream.startCapture { error in
                         if let error { continuation.resume(throwing: error) }
-                        else { continuation.resume() }
+                        else { self.queue.async { self.startEffectFrames() }; continuation.resume() }
                     }
                 } catch { continuation.resume(throwing: error) }
             }
@@ -361,7 +383,9 @@ private final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate,
             if sessionStart == nil { writer.startSession(atSourceTime: time); sessionStart = time }
             if let lastVideoTime, time <= lastVideoTime { return }
             if video.isReadyForMoreMediaData {
-                if video.append(sample) { videoFrames += 1; lastVideoTime = time; lastVideoSample = sample }
+                if adaptor != nil, let image = CMSampleBufferGetImageBuffer(sample) {
+                    keepClean(image); _ = renderFrame(at: time)
+                } else if video.append(sample) { videoFrames += 1; lastVideoTime = time; lastVideoSample = sample }
                 else { reportFailure(writer.error ?? RecordingFailure.message("The video encoder stopped accepting frames.")) }
             }
         } else {
@@ -382,6 +406,48 @@ private final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate,
         queue.async { if !self.finishing { self.reportFailure(error) } }
     }
 
+    private static func copy(_ source: CVPixelBuffer, to target: CVPixelBuffer) {
+        CVPixelBufferLockBaseAddress(source, .readOnly); CVPixelBufferLockBaseAddress(target, [])
+        defer { CVPixelBufferUnlockBaseAddress(target, []); CVPixelBufferUnlockBaseAddress(source, .readOnly) }
+        guard let from = CVPixelBufferGetBaseAddress(source), let to = CVPixelBufferGetBaseAddress(target) else { return }
+        let rows = min(CVPixelBufferGetHeight(source), CVPixelBufferGetHeight(target))
+        let fromRow = CVPixelBufferGetBytesPerRow(source), toRow = CVPixelBufferGetBytesPerRow(target), bytes = min(fromRow, toRow)
+        for row in 0..<rows { memcpy(to + row * toRow, from + row * fromRow, bytes) }
+    }
+    /// Keep an unmodified copy of the latest screen frame so effects can be redrawn on it.
+    private func keepClean(_ image: CVPixelBuffer) {
+        if clean == nil {
+            let attributes: [String: Any] = [kCVPixelBufferIOSurfacePropertiesKey as String: [:]]
+            CVPixelBufferCreate(kCFAllocatorDefault, CVPixelBufferGetWidth(image), CVPixelBufferGetHeight(image), kCVPixelFormatType_32BGRA, attributes as CFDictionary, &clean)
+        }
+        if let clean { Self.copy(image, to: clean) }
+    }
+    @discardableResult private func renderFrame(at time: CMTime) -> Bool {
+        guard let adaptor, let pool = adaptor.pixelBufferPool, let clean else { return false }
+        var frame: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &frame) == kCVReturnSuccess, let frame else { return false }
+        Self.copy(clean, to: frame)
+        if let tracker { CursorOverlay.draw(tracker.snapshot(), effects: effects, region: region, into: frame, now: CACurrentMediaTime()) }
+        guard adaptor.append(frame, withPresentationTime: time) else {
+            reportFailure(writer.error ?? RecordingFailure.message("The video encoder stopped accepting frames.")); return false
+        }
+        videoFrames += 1; lastVideoTime = time; return true
+    }
+    /// ScreenCaptureKit sends frames only when the screen changes; with the real cursor hidden,
+    /// pointer movement and ripples still need frames, so redraw the last image up to 30 times a second.
+    private func startEffectFrames() {
+        guard adaptor != nil, frameTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + .milliseconds(33), repeating: .milliseconds(33))
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.finishing, self.sessionStart != nil, self.clean != nil, self.video.isReadyForMoreMediaData else { return }
+            let now = CMClockGetTime(CMClockGetHostTimeClock())
+            if let last = self.lastVideoTime, CMTimeGetSeconds(CMTimeSubtract(now, last)) < 1.0 / 30 { return }
+            self.renderFrame(at: now)
+        }
+        timer.resume(); frameTimer = timer
+    }
+
     private func reportFailure(_ error: Error) {
         guard !reportedFailure else { return }
         reportedFailure = true
@@ -392,6 +458,7 @@ private final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate,
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             queue.async {
                 self.finishing = true
+                self.frameTimer?.cancel(); self.frameTimer = nil
                 guard let stream = self.stream else { continuation.resume(); return }
                 stream.stopCapture { _ in continuation.resume() }
             }

@@ -45,6 +45,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var paletteController: DrawingToolbarController?
     private var previewPanels:[UUID:NSPanel]=[:]
     private var recentPanel:NSPanel?
+    private var selectionMonitors:[Any]=[]
     private var hiddenPinned:[NSPanel]=[]
     private var previewsHidden=false
     private var pinnedPreviews:[NSPanel]=[]
@@ -107,13 +108,13 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         selectionGeneration += 1
         let generation = selectionGeneration
         report(fixedSize == nil ? "Drag an area to capture · Escape to cancel" : "Move the fixed frame, then click or drag to capture · Escape to cancel")
+        let state = SelectionState(fixedSize: fixedSize)
         for screen in NSScreen.screens {
             let window = CaptureSelectionPanel(frame: screen.frame)
-            let selector = RegionSelectionView(frame: window.contentView!.bounds, fixedSize: fixedSize)
+            let selector = RegionSelectionView(frame: window.contentView!.bounds, state: state)
             selector.onCancel = { [weak self] in self?.cancel() }
-            selector.onComplete = { [weak self, weak window] rect in
-                guard let self, let window, self.selectionGeneration == generation else { return }
-                let global = window.convertToScreen(rect)
+            selector.onComplete = { [weak self] global in
+                guard let self, self.selectionGeneration == generation else { return }
                 self.finishSelection(global)
             }
             window.contentView = selector
@@ -123,6 +124,15 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
         if let current = selectionWindows.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) { current.makeKeyAndOrderFront(nil) }
         NSCursor.crosshair.push()
+        // Follow the pointer onto any display; that display's overlay takes Escape.
+        let follow: () -> Void = { [weak self, weak state] in
+            guard let self, let state else { return }
+            let p = NSEvent.mouseLocation
+            state.moved(to: p)
+            if let window = self.selectionWindows.first(where: { NSMouseInRect(p, $0.frame, false) }), !window.isKeyWindow { window.makeKey() }
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { _ in Task { @MainActor in follow() } }) { selectionMonitors.append(global) }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { event in follow(); return event }) { selectionMonitors.append(local) }
     }
 
     private func finishSelection(_ rect: CGRect) {
@@ -201,6 +211,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     }
 
     private func closeSelection() {
+        selectionMonitors.forEach { NSEvent.removeMonitor($0) }; selectionMonitors = []
         if !selectionWindows.isEmpty { NSCursor.pop() }
         for window in selectionWindows { window.orderOut(nil); window.close() }
         selectionWindows.removeAll()
@@ -595,90 +606,87 @@ private final class ToolOverlayWindow: NSWindow {
     override var canBecomeMain: Bool { false }
 }
 
+/// One selection shared by every display's overlay, in global screen coordinates, so the
+/// crosshair follows the pointer onto any monitor and a drag can span monitors.
 @MainActor
-private final class RegionSelectionView: NSView {
+fileprivate final class SelectionState {
     let fixedSize: CGSize?
+    var pointer: CGPoint? = NSEvent.mouseLocation
+    var anchor: CGPoint?
+    var selection: CGRect?
+    var views: [RegionSelectionView] = []
+    init(fixedSize: CGSize?) { self.fixedSize = fixedSize }
+    func refresh() { views.forEach { $0.needsDisplay = true } }
+    private func fixedRect(at p: CGPoint) -> CGRect {
+        let screen = (NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) } ?? NSScreen.main)?.frame ?? .zero
+        let width = min(screen.width, max(10, fixedSize?.width ?? 640)), height = min(screen.height, max(10, fixedSize?.height ?? 360))
+        return CGRect(x: min(screen.maxX - width, max(screen.minX, p.x - width / 2)), y: min(screen.maxY - height, max(screen.minY, p.y - height / 2)), width: width, height: height)
+    }
+    func moved(to p: CGPoint) { pointer = p; if fixedSize != nil, anchor == nil { selection = fixedRect(at: p) }; refresh() }
+    func began(at p: CGPoint) { anchor = p; pointer = p; selection = fixedSize == nil ? CGRect(origin: p, size: .zero) : fixedRect(at: p); refresh() }
+    func dragged(to p: CGPoint) {
+        guard let anchor else { return }
+        pointer = p
+        selection = fixedSize == nil ? CGRect(x: min(anchor.x, p.x), y: min(anchor.y, p.y), width: abs(p.x - anchor.x), height: abs(p.y - anchor.y)) : fixedRect(at: p)
+        refresh()
+    }
+}
+
+@MainActor
+fileprivate final class RegionSelectionView: NSView {
+    let state: SelectionState
     var onComplete: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
-    private var anchor: CGPoint?
-    private var selection: CGRect?
-    private var tracking: NSTrackingArea?
-    /// Drawn crosshair: a nonactivating overlay can't change the system cursor,
-    /// so capture mode is shown with guide lines in the user's chosen colour.
-    private var pointer: CGPoint?
     private let crosshairColor = CaptureCrosshair.color
     override var acceptsFirstResponder: Bool { true }
-
-    init(frame: CGRect, fixedSize: CGSize?) { self.fixedSize = fixedSize; super.init(frame: frame) }
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard let window, NSMouseInRect(NSEvent.mouseLocation, window.frame, false) else { return }
-        pointer = convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil); needsDisplay = true
-    }
-    override func mouseExited(with event: NSEvent) { pointer = nil; needsDisplay = true }
+    init(frame: CGRect, state: SelectionState) { self.state = state; super.init(frame: frame); state.views.append(self) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func updateTrackingAreas() {
-        if let tracking { removeTrackingArea(tracking) }
-        tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
-        addTrackingArea(tracking!); super.updateTrackingAreas()
-    }
-    private func point(_ event: NSEvent) -> CGPoint {
-        let p = convert(event.locationInWindow, from: nil)
-        return CGPoint(x: min(bounds.maxX, max(0, p.x)), y: min(bounds.maxY, max(0, p.y)))
-    }
-    private func fixedRect(at p: CGPoint) -> CGRect {
-        let width = min(bounds.width, max(10, fixedSize?.width ?? 640))
-        let height = min(bounds.height, max(10, fixedSize?.height ?? 360))
-        return CGRect(x: min(bounds.width - width, max(0, p.x - width / 2)), y: min(bounds.height - height, max(0, p.y - height / 2)), width: width, height: height)
-    }
-    override func mouseMoved(with event: NSEvent) {
-        pointer = point(event)
-        if fixedSize != nil, anchor == nil { selection = fixedRect(at: pointer!) }
-        needsDisplay = true
-    }
-    override func mouseDown(with event: NSEvent) {
-        window?.makeKey(); anchor = point(event)
-        selection = fixedSize == nil ? CGRect(origin: anchor!, size: .zero) : fixedRect(at: anchor!)
-        needsDisplay = true
-    }
-    override func mouseDragged(with event: NSEvent) {
-        guard let anchor else { return }
-        let p = point(event); pointer = p
-        selection = fixedSize == nil ? CGRect(x: min(anchor.x, p.x), y: min(anchor.y, p.y), width: abs(p.x - anchor.x), height: abs(p.y - anchor.y)) : fixedRect(at: p)
-        needsDisplay = true
-    }
-    override func mouseUp(with event: NSEvent) { if let selection { onComplete?(selection) } }
+    /// This display's frame in global coordinates; drawing converts global points into it.
+    private var screenFrame: CGRect { window?.frame ?? .zero }
+    private func local(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x - screenFrame.minX, y: p.y - screenFrame.minY) }
+    // Global pointer positions keep working when a drag leaves this display.
+    override func mouseMoved(with event: NSEvent) { state.moved(to: NSEvent.mouseLocation) }
+    override func mouseDown(with event: NSEvent) { window?.makeKey(); state.began(at: NSEvent.mouseLocation) }
+    override func mouseDragged(with event: NSEvent) { state.dragged(to: NSEvent.mouseLocation) }
+    override func mouseUp(with event: NSEvent) { if let selection = state.selection { onComplete?(selection) } }
+    override func keyDown(with event: NSEvent) { if event.keyCode == 53 { onCancel?() } else { super.keyDown(with: event) } }
+    /// A small crosshair at the pointer (no full-screen guide lines), in the chosen colour.
     private func drawCrosshair(at p: CGPoint) {
-        let x = p.x.rounded() + 0.5, y = p.y.rounded() + 0.5
-        let guides = NSBezierPath()
-        guides.move(to: CGPoint(x: bounds.minX, y: y)); guides.line(to: CGPoint(x: bounds.maxX, y: y))
-        guides.move(to: CGPoint(x: x, y: bounds.minY)); guides.line(to: CGPoint(x: x, y: bounds.maxY))
-        NSColor.black.withAlphaComponent(0.35).setStroke(); guides.lineWidth = 3; guides.stroke()
-        crosshairColor.withAlphaComponent(0.9).setStroke(); guides.lineWidth = 1; guides.stroke()
-        let ring = NSBezierPath(ovalIn: CGRect(x: x - 9, y: y - 9, width: 18, height: 18))
-        NSColor.black.withAlphaComponent(0.5).setStroke(); ring.lineWidth = 4; ring.stroke()
-        crosshairColor.setStroke(); ring.lineWidth = 2; ring.stroke()
-        let label = "\(Int(p.x)), \(Int(bounds.height - p.y))"
+        let x = p.x.rounded() + 0.5, y = p.y.rounded() + 0.5, arm: CGFloat = 11, gap: CGFloat = 3
+        let mark = NSBezierPath()
+        for (dx, dy) in [(1.0, 0.0), (-1, 0), (0, 1), (0, -1)] {
+            mark.move(to: CGPoint(x: x + dx * gap, y: y + dy * gap)); mark.line(to: CGPoint(x: x + dx * arm, y: y + dy * arm))
+        }
+        mark.lineCapStyle = .round
+        NSColor.black.withAlphaComponent(0.6).setStroke(); mark.lineWidth = 4; mark.stroke()
+        crosshairColor.setStroke(); mark.lineWidth = 2; mark.stroke()
+        let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+        let global = CGPoint(x: screenFrame.minX + p.x, y: screenFrame.minY + p.y)
+        let label = "\(Int(global.x)), \(Int(primaryTop - global.y))"
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.white, .backgroundColor: NSColor.black.withAlphaComponent(0.65)]
         let size = (label as NSString).size(withAttributes: attrs)
-        let origin = CGPoint(x: min(x + 14, bounds.maxX - size.width - 4), y: max(4, y - size.height - 14))
-        (label as NSString).draw(at: origin, withAttributes: attrs)
+        (label as NSString).draw(at: CGPoint(x: min(x + 14, bounds.maxX - size.width - 4), y: max(4, y - size.height - 14)), withAttributes: attrs)
     }
-    override func keyDown(with event: NSEvent) { if event.keyCode == 53 { onCancel?() } else { super.keyDown(with: event) } }
     override func draw(_ dirtyRect: NSRect) {
-        // Keep the screen at its normal brightness. Only the selection outline
-        // and compact help labels are drawn over the underlying app.
+        // Keep the screen at its normal brightness. Only the selection outline,
+        // the small crosshair and compact help labels are drawn over the underlying app.
         NSColor.clear.setFill(); bounds.fill(using: .copy)
-        if fixedSize == nil, anchor == nil, let p = pointer { drawCrosshair(at: p) }
-        if let selection, selection.width > 0, selection.height > 0 {
+        let pointerHere = state.pointer.map { NSMouseInRect($0, screenFrame, false) } ?? false
+        if state.fixedSize == nil, state.anchor == nil, pointerHere, let p = state.pointer { drawCrosshair(at: local(p)) }
+        if let global = state.selection, global.width > 0, global.height > 0 {
+            let selection = global.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY)
             let outline = NSBezierPath(rect: selection)
             NSColor.black.withAlphaComponent(0.75).setStroke(); outline.lineWidth = 3; outline.stroke()
             NSColor.white.setStroke(); outline.lineWidth = 1; outline.stroke()
-            let label = "\(Int(selection.width)) × \(Int(selection.height)) pt"
-            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white, .backgroundColor: NSColor.black.withAlphaComponent(0.7)]
-            (label as NSString).draw(at: CGPoint(x: selection.minX + 5, y: max(5, selection.minY - 23)), withAttributes: attrs)
+            // The size label sits once, on the display holding the selection's bottom-left corner.
+            if NSMouseInRect(CGPoint(x: global.minX + 1, y: global.minY + 1), screenFrame, false) {
+                let label = "\(Int(global.width)) × \(Int(global.height)) pt"
+                let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white, .backgroundColor: NSColor.black.withAlphaComponent(0.7)]
+                (label as NSString).draw(at: CGPoint(x: selection.minX + 5, y: max(5, selection.minY - 23)), withAttributes: attrs)
+            }
         }
-        let hint = fixedSize == nil ? "Drag to select an area • Escape cancels" : "Move the frame • Click or drag to capture • Escape cancels"
+        guard pointerHere || state.pointer == nil else { return }
+        let hint = state.fixedSize == nil ? "Drag to select an area • You can drag across displays • Escape cancels" : "Move the frame • Click or drag to capture • Escape cancels"
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white]
         let size = (hint as NSString).size(withAttributes: attrs)
         let origin = CGPoint(x: (bounds.width - size.width) / 2, y: bounds.height - 54)
