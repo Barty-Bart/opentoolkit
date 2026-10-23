@@ -134,12 +134,15 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             selectionWindows.append(window)
         }
         if let current = selectionWindows.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) { current.makeKeyAndOrderFront(nil) }
-        NSCursor.crosshair.push()
+        // The real pointer becomes the coloured crosshair, so nothing trails behind it.
+        let cursor = CaptureCrosshair.cursor()
+        cursor.push()
         // Follow the pointer onto any display; that display's overlay takes Escape.
         let follow: () -> Void = { [weak self, weak state] in
             guard let self, let state else { return }
             let p = NSEvent.mouseLocation
             state.moved(to: p)
+            cursor.set()
             if let window = self.selectionWindows.first(where: { NSMouseInRect(p, $0.frame, false) }), !window.isKeyWindow { window.makeKey() }
         }
         if let global = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { _ in Task { @MainActor in follow() } }) { selectionMonitors.append(global) }
@@ -662,6 +665,7 @@ fileprivate final class SelectionState {
     var anchor: CGPoint?
     var selection: CGRect?
     var views: [RegionSelectionView] = []
+    let cursor = CaptureCrosshair.cursor()
     init(fixedSize: CGSize?) { self.fixedSize = fixedSize }
     func refresh() { views.forEach { $0.needsDisplay = true } }
     private func fixedRect(at p: CGPoint) -> CGRect {
@@ -684,7 +688,6 @@ fileprivate final class RegionSelectionView: NSView {
     let state: SelectionState
     var onComplete: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
-    private let crosshairColor = CaptureCrosshair.color
     override var acceptsFirstResponder: Bool { true }
     private var tracking: NSTrackingArea?
     init(frame: CGRect, state: SelectionState) { self.state = state; super.init(frame: frame); state.views.append(self) }
@@ -692,10 +695,12 @@ fileprivate final class RegionSelectionView: NSView {
     // Without this, a display's overlay never hears the pointer arrive while another app is active.
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
-        tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(tracking!); super.updateTrackingAreas()
     }
-    override func mouseEntered(with event: NSEvent) { state.moved(to: NSEvent.mouseLocation); window?.makeKey() }
+    override func mouseEntered(with event: NSEvent) { state.moved(to: NSEvent.mouseLocation); window?.makeKey(); state.cursor.set() }
+    override func cursorUpdate(with event: NSEvent) { state.cursor.set() }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: state.cursor) }
     /// This display's frame in global coordinates; drawing converts global points into it.
     private var screenFrame: CGRect { window?.frame ?? .zero }
     private func local(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x - screenFrame.minX, y: p.y - screenFrame.minY) }
@@ -705,16 +710,10 @@ fileprivate final class RegionSelectionView: NSView {
     override func mouseDragged(with event: NSEvent) { state.dragged(to: NSEvent.mouseLocation) }
     override func mouseUp(with event: NSEvent) { if let selection = state.selection { onComplete?(selection) } }
     override func keyDown(with event: NSEvent) { if event.keyCode == 53 { onCancel?() } else { super.keyDown(with: event) } }
-    /// A small crosshair at the pointer (no full-screen guide lines), in the chosen colour.
+    /// Coordinates beside the pointer. The crosshair itself is the system cursor
+    /// (`CaptureCrosshair.cursor()`), so it never lags behind the pointer.
     private func drawCrosshair(at p: CGPoint) {
-        let x = p.x.rounded() + 0.5, y = p.y.rounded() + 0.5, arm: CGFloat = 11, gap: CGFloat = 3
-        let mark = NSBezierPath()
-        for (dx, dy) in [(1.0, 0.0), (-1, 0), (0, 1), (0, -1)] {
-            mark.move(to: CGPoint(x: x + dx * gap, y: y + dy * gap)); mark.line(to: CGPoint(x: x + dx * arm, y: y + dy * arm))
-        }
-        mark.lineCapStyle = .round
-        NSColor.black.withAlphaComponent(0.6).setStroke(); mark.lineWidth = 4; mark.stroke()
-        crosshairColor.setStroke(); mark.lineWidth = 2; mark.stroke()
+        let x = p.x.rounded() + 0.5, y = p.y.rounded() + 0.5
         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
         let global = CGPoint(x: screenFrame.minX + p.x, y: screenFrame.minY + p.y)
         let label = "\(Int(global.x)), \(Int(primaryTop - global.y))"
@@ -809,6 +808,21 @@ enum CaptureCrosshair {
     static var color: NSColor {
         let name = UserDefaults.standard.string(forKey: "captureCrosshairColor") ?? "Cyan"
         return options.first { $0.name == name }?.color ?? .systemTeal
+    }
+    /// A small crosshair cursor in the chosen colour with a dark outline, hot spot at its centre.
+    static func cursor(color: NSColor = color) -> NSCursor {
+        let size: CGFloat = 25, c = size / 2, arm: CGFloat = 11, gap: CGFloat = 3
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
+            let mark = NSBezierPath()
+            for (dx, dy) in [(1.0, 0.0), (-1, 0), (0, 1), (0, -1)] {
+                mark.move(to: CGPoint(x: c + dx * gap, y: c + dy * gap)); mark.line(to: CGPoint(x: c + dx * arm, y: c + dy * arm))
+            }
+            mark.lineCapStyle = .round
+            NSColor.black.withAlphaComponent(0.6).setStroke(); mark.lineWidth = 4; mark.stroke()
+            color.setStroke(); mark.lineWidth = 2; mark.stroke()
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: c, y: c))
     }
 }
 
