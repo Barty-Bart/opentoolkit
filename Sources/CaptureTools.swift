@@ -55,6 +55,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var appBeforeEditing: NSRunningApplication?
     /// The display holding the thumbnail stack; it follows the pointer between displays.
     private var trayScreen: NSScreen?
+    /// The within-display tidy slide takes 0.22 s; moving to another display takes about half a second longer.
+    static let trayGlideDuration: TimeInterval = 0.72
     private var trayFollow: Timer?
     var hasOpenEditor: Bool { editors.contains { $0.window?.isVisible == true } }
     private var captureInFlight = false
@@ -477,7 +479,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             host.menu=menu;panel.contentView=host
             let frame=CGRect(x:visible.minX+18,y:visible.minY+18+CGFloat(visibleItems.count-1-i)*140,width:200,height:128)
             // Slide existing previews into their new slot so a removed one reads as the stack tidying up.
-            if panel.isVisible && panel.frame != frame && !movedScreen {NSAnimationContext.runAnimationGroup{context in context.duration=0.22;panel.animator().setFrame(frame,display:true)}}
+            // Following the pointer to another display glides more slowly, so the stack is easy to track.
+            if panel.isVisible && panel.frame != frame {NSAnimationContext.runAnimationGroup{context in context.duration=movedScreen ? Self.trayGlideDuration:0.22;context.timingFunction=CAMediaTimingFunction(name:.easeInEaseOut);panel.animator().setFrame(frame,display:true)}}
             else {panel.setFrame(frame,display:true)}
             panel.orderFrontRegardless();previewPanels[item.id]=panel
         }
