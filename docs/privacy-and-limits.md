@@ -1,6 +1,6 @@
 # Data, privacy and preview limits
 
-Data lives in `~/Library/Application Support/Pico`, outside the checkout. There is no telemetry, sign-in, sync, email watcher or remote transcription. Model downloads contact their hosts. Never commit your library, custom corrections, sounds, captures, credentials or speech environment.
+Data lives in `~/Library/Application Support/Pico`, outside the checkout. There is no telemetry, sign-in, sync, email watcher or remote transcription. Model downloads contact their hosts. OpenToolkit asks GitHub for the latest release shortly after launch and then once a day, so it can show an update badge; nothing about you is sent. Turn this off in Settings › Check for updates automatically. Never commit your library, custom corrections, sounds, captures, credentials or speech environment.
 
 The internal `Pico` data directory and bundle identifiers remain stable across the rename, so existing history, corrections and preferences are reused. The former default “Hey Pico” or “Hey OpenToolkit” becomes “Hey Toolkit”; custom wake phrases are preserved. Quit the old Pico app and stop its speech worker before opening OpenToolkit. The repository is now `Barty-Bart/opentoolkit`.
 

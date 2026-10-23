@@ -3,6 +3,7 @@ import SwiftUI
 import Carbon
 import ScreenCaptureKit
 import AVFoundation
+import Combine
 
 let storageRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pico",isDirectory:true)
 enum ToolPage: String, CaseIterable, Identifiable {
@@ -28,6 +29,7 @@ enum ToolPage: String, CaseIterable, Identifiable {
     @Published var annotationKeys = UserDefaults.standard.dictionary(forKey:"annotationKeys") as? [String:String] ?? AnnotationSettings.defaults
     let correctionPrompts=CorrectionPrompts()
     let updates=AppUpdates()
+    private var updateObserver:AnyCancellable?
     let voice:VoiceBridge
     let capture:CaptureCoordinator
     let recording:RecordingCoordinator
@@ -66,6 +68,8 @@ enum ToolPage: String, CaseIterable, Identifiable {
         capture.onStatus={ [weak self] text in self?.notice=text }
         capture.onShowAllHistory={ [weak self] in self?.captureSection="History";self?.page = .capture;self?.showWindow?() }
         capture.onDrawingActiveChanged={ [weak self] _ in self?.registerDrawingTools() }
+        // The sidebar bubble and Settings order follow update availability.
+        updateObserver=updates.objectWillChange.sink{ [weak self] _ in self?.objectWillChange.send() }
         updates.busyReason={ [weak self] in
             guard let self else{return nil}
             if voice.state.recording || voice.state.busy {return "Finish your dictation, then install the update."}
@@ -242,8 +246,8 @@ struct ToolCard<Content:View>:View {
 struct RootView:View {
     @ObservedObject var model:AppModel
     var voiceTabs:some View {Picker("Voice section",selection:$model.page){Text("Settings").tag(ToolPage.voice);Text("History").tag(ToolPage.history);Text("Corrections").tag(ToolPage.corrections)}.pickerStyle(.segmented)}
-    var body:some View {HStack(spacing:0){VStack(alignment:.leading,spacing:6){HStack{Image(systemName:"command.square.fill").font(.title).foregroundStyle(.cyan);VStack(alignment:.leading){Text("OpenToolkit").font(.headline);Text("YOUR LOCAL TOOLBOX").font(.system(size:9,weight:.semibold,design:.monospaced)).tracking(1.1).foregroundStyle(.secondary)}}.padding(.bottom,26)
-        ForEach(ToolPage.allCases.filter{$0 != .history && $0 != .corrections && $0 != .continuous && $0 != .recording}){p in Button{model.page=p} label:{HStack(spacing:11){Image(systemName:p.symbol).foregroundStyle(p.color).frame(width:22);Text(p.rawValue);Spacer(minLength:0)}.padding(.horizontal,10).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).contentShape(Rectangle()).background(model.page==p ? .white.opacity(0.09):.clear,in:RoundedRectangle(cornerRadius:9))}.buttonStyle(.plain)}
+    var body:some View {HStack(spacing:0){VStack(alignment:.leading,spacing:6){HStack{Image(nsImage:NSApp.applicationIconImage).resizable().frame(width:32,height:32);VStack(alignment:.leading){Text("OpenToolkit").font(.headline);Text("YOUR LOCAL TOOLBOX").font(.system(size:9,weight:.semibold,design:.monospaced)).tracking(1.1).foregroundStyle(.secondary)}}.padding(.bottom,26)
+        ForEach(ToolPage.allCases.filter{$0 != .history && $0 != .corrections && $0 != .continuous && $0 != .recording}){p in Button{model.page=p} label:{HStack(spacing:11){Image(systemName:p.symbol).foregroundStyle(p.color).frame(width:22);Text(p.rawValue);Spacer(minLength:0);if p == .settings && model.updates.available != nil {Text("1").font(.system(size:11,weight:.bold)).foregroundStyle(.white).padding(.horizontal,7).padding(.vertical,2).background(Capsule().fill(Color.red)).help("An update is available")}}.padding(.horizontal,10).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).contentShape(Rectangle()).background(model.page==p ? .white.opacity(0.09):.clear,in:RoundedRectangle(cornerRadius:9))}.buttonStyle(.plain)}
         Spacer();Text("OpenToolkit \(AppUpdates.version)").font(.system(size:10,design:.monospaced)).foregroundStyle(.secondary)
     }.padding(18).frame(width:224).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:22)).overlay{RoundedRectangle(cornerRadius:22).strokeBorder(.white.opacity(0.12),lineWidth:1)}.padding(8);VStack(spacing:0){HStack{VStack(alignment:.leading,spacing:5){Text(model.page.rawValue).font(.system(size:22,weight:.semibold));Text(subtitle).font(.callout).foregroundStyle(.secondary)};Spacer();Image(systemName:model.page.symbol).font(.system(size:30,weight:.light)).foregroundStyle(model.page.color)}.padding(28)
         ScrollView{content.padding(.horizontal,28).padding(.bottom,28)}.id(model.recoveryID);Divider();Text(model.notice).font(.caption).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading).padding(13)
@@ -251,7 +255,7 @@ struct RootView:View {
     var subtitle:String {switch model.page {case .home:return "Capture an idea. Show it clearly. Keep moving.";case .voice:return "Your voice, transcribed on your Mac.";case .corrections:return "Words your way. Confirm, disable or remove a correction.";case .history:return "Copy a past transcription or tune your word corrections.";case .capture:return "Select, annotate, then drag it wherever you need it.";case .drawing:return "Draw directly over your screen.";case .recording:return "Record a region, with a frame you control.";case .organizer:return "A place for quick thoughts and timely nudges.";case .continuous:return "Visible, optional capture. Always under your control.";case .settings:return "Choose your shortcuts and the tools you want."}}
     @ViewBuilder var content:some View {
         switch model.page {
-        case .home: VStack(spacing:18){ToolCard(title:"Your tools",subtitle:"Open a tool to use it or change its settings."){LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:12){toolLink(.voice,"Speak into any text box");toolLink(.capture,"Capture, edit & record");toolLink(.drawing,"Draw over your screen");toolLink(.organizer,"Keep notes & meeting transcripts")}};VoiceSummary(voice:model.voice);UpdateSettingsView(updates:model.updates)}
+        case .home: VStack(spacing:18){ToolCard(title:"Your tools",subtitle:"Open a tool to use it or change its settings."){LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:12){toolLink(.voice,"Speak into any text box");toolLink(.capture,"Capture, edit & record");toolLink(.drawing,"Draw over your screen");toolLink(.organizer,"Keep notes & meeting transcripts")}};VoiceSummary(voice:model.voice)}
         case .voice: VStack(spacing:18){voiceTabs;VoiceView(voice:model.voice);DictationModesView(voice:model.voice);VoiceFeedbackSettings(voice:model.voice)}
         case .corrections:VStack(spacing:18){voiceTabs;SpeechHistoryView(voice:model.voice,correctionsOnly:true)}
         case .history:VStack(spacing:18){voiceTabs;SpeechHistoryView(voice:model.voice,saveAsNote:{text in model.organizer.addNote(text);model.notice="Saved a copy in Notes."})}
@@ -264,7 +268,7 @@ struct RootView:View {
         case .recording:VStack(spacing:18){ToolCard(title:"Screen recording",subtitle:"Select a free region or lock the dimensions. System audio is included; microphone audio is optional.",accent:.red){Toggle("Enable recording",isOn:binding("recording"));Toggle("Include microphone",isOn:$model.includeMic);frameControls;RecordingControls(recording:model.recording,begin:{model.perform("recording")})};Button("Open recordings folder"){NSWorkspace.shared.open(storageRoot.appendingPathComponent("Recordings"))}}
         case .organizer:if model.enabled("organizer") {NotesLibraryView(model:model)}else{ToolCard(title:"Notes · experimental",subtitle:"Local notes and keyword search. AI summaries and model discovery are deferred."){Button("Enable Notes"){model.toggle("organizer",true)}}}
         case .continuous:ContinuousView(voice:model.voice,organizer:model.organizer,meetingAudio:model.meetingAudio,systemAudio:$model.systemMeetingAudio,enabled:model.enabled("continuous"))
-        case .settings:VStack(spacing:18){ShortcutsView(model:model);UpdateSettingsView(updates:model.updates);Button("Setup & speech runtime…"){UserDefaults.standard.set(false,forKey:"setupComplete");model.hotkeys?.clear()};ToolCard(title:"Tools",subtitle:"Turn off the tools you do not need."){ForEach(["screenshots","drawing","recording","organizer","continuous"],id:\.self){key in Toggle(["screenshots":"Screenshots","drawing":"Screen drawing","recording":"Screen recording","organizer":"Notes","continuous":"Meeting & daily notes"][key] ?? key,isOn:binding(key))}};PermissionsView(voice:model.voice);Button("Open local data folder"){NSWorkspace.shared.open(storageRoot)};Text("Email watching is deferred. No cloud accounts are connected.").font(.caption).foregroundStyle(.secondary)}
+        case .settings:VStack(spacing:18){if model.updates.available != nil {UpdateSettingsView(updates:model.updates)};ShortcutsView(model:model);if model.updates.available == nil {UpdateSettingsView(updates:model.updates)};Button("Setup & speech runtime…"){UserDefaults.standard.set(false,forKey:"setupComplete");model.hotkeys?.clear()};ToolCard(title:"Tools",subtitle:"Turn off the tools you do not need."){ForEach(["screenshots","drawing","recording","organizer","continuous"],id:\.self){key in Toggle(["screenshots":"Screenshots","drawing":"Screen drawing","recording":"Screen recording","organizer":"Notes","continuous":"Meeting & daily notes"][key] ?? key,isOn:binding(key))}};PermissionsView(voice:model.voice);Button("Open local data folder"){NSWorkspace.shared.open(storageRoot)};Text("Email watching is deferred. No cloud accounts are connected.").font(.caption).foregroundStyle(.secondary)}
         }
     }
     func binding(_ key:String)->Binding<Bool>{Binding(get:{model.enabled(key)},set:{model.toggle(key,$0)})}
@@ -323,7 +327,7 @@ struct ContinuousView:View {
     func applicationDidFinishLaunching(_ notification:Notification){
         NSApp.setActivationPolicy(.regular)
         installMainMenu()
-        model=AppModel();model.hotkeys=Hotkeys();if UserDefaults.standard.bool(forKey:"setupComplete"){model.registerHotkeys();if model.voice.settings.dictationEnabled {model.voice.startSpeech()}}
+        model=AppModel();model.hotkeys=Hotkeys();model.updates.startAutomaticChecks();if UserDefaults.standard.bool(forKey:"setupComplete"){model.registerHotkeys();if model.voice.settings.dictationEnabled {model.voice.startSpeech()}}
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1050,height:788),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         window.appearance=NSAppearance(named:.darkAqua)
         window.backgroundColor=NSColor(calibratedRed:0.13,green:0.15,blue:0.16,alpha:1)
@@ -347,13 +351,13 @@ struct ContinuousView:View {
         window.center();window.minSize=NSSize(width:960,height:728)
         model.showWindow={ [weak self] in self?.show() }
         statusItem=NSStatusBar.system.statusItem(withLength:NSStatusItem.variableLength)
-        statusItem.button?.image=NSImage(systemSymbolName:"command.square",accessibilityDescription:"OpenToolkit")
+        statusItem.button?.image=NSImage(systemSymbolName:"command",accessibilityDescription:"OpenToolkit")
         statusItem.button?.imagePosition = .imageLeading
         // Rebuilt on every open so shortcuts, recording/drawing state and the wake
         // checkmark always match the current settings.
         let menu=NSMenu();menu.delegate=self;menu.autoenablesItems=false
         statusItem.menu=menu
-        stateTimer=Timer.scheduledTimer(withTimeInterval:1,repeats:true){[weak self] _ in Task{@MainActor in guard let self else{return};let active=self.model.voice.state.recording || ["meeting","ambient"].contains(self.model.voice.state.mode);self.statusItem.button?.title=self.model.recording.isRecording ? " REC":active ? " MIC":"";self.statusItem.button?.toolTip=self.model.voice.state.status}}
+        stateTimer=Timer.scheduledTimer(withTimeInterval:1,repeats:true){[weak self] _ in Task{@MainActor in guard let self else{return};let active=self.model.voice.state.recording || ["meeting","ambient"].contains(self.model.voice.state.mode);self.statusItem.button?.title=self.model.recording.isRecording ? " REC":active ? " MIC":"";self.statusItem.button?.toolTip=self.model.updates.available.map{"OpenToolkit \($0.tag_name) is available"} ?? self.model.voice.state.status;self.showUpdateBadge(self.model.updates.available != nil)}}
         // Maintenance updates can resume the menu-bar app without stealing the
         // text field the user is working in. A normal launch still opens Tools.
         if !CommandLine.arguments.contains("--background") {show()}
@@ -379,6 +383,11 @@ struct ContinuousView:View {
     func menuNeedsUpdate(_ menu:NSMenu){
         guard menu === statusItem.menu else{return}
         menu.removeAllItems()
+        if let release=model.updates.available {
+            let item=NSMenuItem(title:"Update Available: OpenToolkit \(release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()):release.tag_name)…",action:#selector(updateAvailableAction),keyEquivalent:"")
+            item.target=self;item.image=NSImage(systemSymbolName:"circle.fill",accessibilityDescription:nil)?.withSymbolConfiguration(.init(pointSize:8,weight:.regular).applying(.init(paletteColors:[.systemRed])))
+            menu.addItem(item);menu.addItem(.separator())
+        }
         func tool(_ title:String,_ action:String,shortcut:String?=nil){
             let item=NSMenuItem(title:title,action:#selector(toolAction(_:)),keyEquivalent:"");item.target=self;item.representedObject=action
             if let name=shortcut,let key=model.keys[name] {item.keyEquivalent=key.lowercased();item.keyEquivalentModifierMask=modifierMask(model.modifiers(name))}
@@ -426,11 +435,30 @@ struct ContinuousView:View {
         if flags & UInt32(controlKey) != 0 {mask.insert(.control)};if flags & UInt32(shiftKey) != 0 {mask.insert(.shift)}
         return mask
     }
+    private var badgeShown:Bool?
+    /// A small red dot on the menu-bar icon and a Dock badge while an update is waiting (no flashing).
+    func showUpdateBadge(_ visible:Bool){
+        guard badgeShown != visible else{return};badgeShown=visible
+        NSApp.dockTile.badgeLabel=visible ? "1":nil
+        guard let symbol=NSImage(systemSymbolName:"command",accessibilityDescription:"OpenToolkit") else{return}
+        guard visible else{symbol.isTemplate=true;statusItem.button?.image=symbol;return}
+        let size=NSSize(width:18,height:16)
+        let image=NSImage(size:size,flipped:false){rect in
+            // Drawn on demand, so the symbol follows the menu bar's light or dark appearance.
+            let tinted=symbol.copy() as! NSImage;tinted.isTemplate=false
+            let glyph=NSRect(x:0,y:0,width:16,height:16)
+            tinted.draw(in:glyph);NSColor.labelColor.set();glyph.fill(using:.sourceAtop)
+            NSColor.systemRed.setFill();NSBezierPath(ovalIn:NSRect(x:rect.maxX-7,y:rect.maxY-7,width:7,height:7)).fill()
+            return true
+        }
+        image.isTemplate=false;statusItem.button?.image=image
+    }
     @objc func toggleWake(){model.voice.setWake(!model.voice.settings.wakeEnabled)}
     func show(){NSApp.activate(ignoringOtherApps:true);window.makeKeyAndOrderFront(nil)}
     @objc func showAction(){show()}
     @objc func screenshotHistory(){model.capture.showRecentHistory()}
     @objc func updateAction(){model.page = .settings;show();model.updates.check()}
+    @objc func updateAvailableAction(){model.page = .settings;show()}
     @objc func settingsAction(){model.page = .settings;show()}
     @objc func voiceSettingsAction(){model.page = .voice;show()}
     @objc func toolAction(_ sender:NSMenuItem){

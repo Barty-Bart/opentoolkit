@@ -11,7 +11,7 @@ struct SetupView: View {
     private var memoryGB: Int { Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824) }
     var body: some View {
         ScrollView { VStack(alignment:.leading,spacing:20) {
-            Label("Welcome to OpenToolkit",systemImage:"command.square.fill").font(.largeTitle.bold()).foregroundStyle(.cyan)
+            Label{Text("Welcome to OpenToolkit")}icon:{Image(nsImage:NSApp.applicationIconImage).resizable().frame(width:40,height:40)}.font(.largeTitle.bold())
             Text("opentoolkit.app").font(.callout).foregroundStyle(.secondary)
             Text("Your everyday Mac toolkit.").font(.title3)
             GroupBox("This Mac") {

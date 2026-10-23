@@ -76,10 +76,28 @@ private final class DownloadProgress: NSObject, URLSessionDownloadDelegate {
     @Published var available: PublishedRelease?
     /// Returns a reason to wait (recording, dictating…) or nil when it's safe to restart.
     var busyReason: () -> String? = { nil }
+    /// On by default; only asks GitHub for the latest release, never sends anything about the user.
+    static var automatic: Bool {
+        get { UserDefaults.standard.object(forKey: "autoCheckUpdates") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "autoCheckUpdates") }
+    }
+    private var timer: Timer?
+    /// Quietly check shortly after launch and then once a day, never while dictating or recording.
+    func startAutomaticChecks() {
+        timer?.invalidate()
+        let due: () -> Void = { [weak self] in
+            guard let self, Self.automatic, !self.checking, !self.installing, self.busyReason() == nil else { return }
+            let last = UserDefaults.standard.object(forKey: "lastUpdateCheck") as? Date ?? .distantPast
+            if Date().timeIntervalSince(last) >= 20 * 3600 { self.check(silent: true) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { due() }
+        timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in Task { @MainActor in due() } }
+    }
 
-    func check() {
+    func check(silent: Bool = false) {
         guard !checking, !installing else { return }
-        checking = true; releaseURL = nil; available = nil; message = "Checking releases…"
+        checking = true
+        if !silent { releaseURL = nil; available = nil; message = "Checking releases…" }
         Task {
             defer { checking = false }
             do {
@@ -89,6 +107,7 @@ private final class DownloadProgress: NSObject, URLSessionDownloadDelegate {
                 request.setValue("OpenToolkit-update-check", forHTTPHeaderField: "User-Agent")
                 let (data, response) = try await URLSession.shared.data(for: request)
                 let code = (response as? HTTPURLResponse)?.statusCode
+                UserDefaults.standard.set(Date(), forKey: "lastUpdateCheck")
                 if code == 404 { message = "No public release is available yet. This local build is installed."; return }
                 guard code == 200, data.count < 1_000_000 else { throw URLError(.badServerResponse) }
                 let release = try JSONDecoder().decode(PublishedRelease.self, from: data)
@@ -101,8 +120,8 @@ private final class DownloadProgress: NSObject, URLSessionDownloadDelegate {
                     releaseURL = url
                     if release.installer != nil { available = release; message = "OpenToolkit \(version) is available." }
                     else { message = "Update available: \(release.tag_name). Download it from the release page." }
-                } else { message = "You're up to date · OpenToolkit \(Self.version) (latest release \(release.tag_name))." }
-            } catch { message = "Could not check GitHub. Your app is unchanged. Try again when online." }
+                } else { available = nil; message = "You're up to date · OpenToolkit \(Self.version) (latest release \(release.tag_name))." }
+            } catch { if !silent { message = "Could not check GitHub. Your app is unchanged. Try again when online." } }
         }
     }
 
@@ -235,6 +254,7 @@ struct UpdateSettingsView: View {
                 if let url = updates.releaseURL { Button("What's new") { NSWorkspace.shared.open(url) } }
             }
             Text(updates.message).font(.callout).foregroundStyle(.secondary)
+            Toggle("Check for updates automatically (once a day)", isOn: Binding(get: { AppUpdates.automatic }, set: { AppUpdates.automatic = $0; updates.objectWillChange.send() }))
             Text("Updates come only from this app's GitHub releases. The download must be notarized by Apple and signed by the same developer before it replaces the app. Your library, settings and permissions stay as they are.").font(.caption).foregroundStyle(.secondary)
         }
     }
