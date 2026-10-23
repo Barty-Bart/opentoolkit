@@ -250,7 +250,7 @@ final class Hotkeys {
 }
 struct ToolCard<Content:View>:View {
     let title:String;let subtitle:String;var accent:Color = .cyan;@ViewBuilder var content:()->Content
-    var body:some View {VStack(alignment:.leading,spacing:14){Text(title).font(.system(size:14,weight:.semibold));if !subtitle.isEmpty {Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)};content()}.frame(maxWidth:.infinity,alignment:.leading).padding(18).background(.regularMaterial,in:RoundedRectangle(cornerRadius:18)).overlay{RoundedRectangle(cornerRadius:18).strokeBorder(.white.opacity(0.06),lineWidth:1)}}
+    var body:some View {VStack(alignment:.leading,spacing:14){Text(title).font(.system(size:14,weight:.semibold));if !subtitle.isEmpty {Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)};content()}.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading).padding(18).background(.regularMaterial,in:RoundedRectangle(cornerRadius:18)).overlay{RoundedRectangle(cornerRadius:18).strokeBorder(.white.opacity(0.06),lineWidth:1)}}
 }
 /// Settings sections, shown as a list inside the Settings page (and later a Settings window).
 enum SettingsSection:String,CaseIterable,Identifiable {
@@ -280,46 +280,42 @@ struct RootView:View {
         }
     }
     private func title(_ page:ToolPage)->String {page == .capture ? "Screenshots":page == .voice ? "Dictation":page.rawValue}
-    private func symbol(_ page:ToolPage)->String {page == .capture ? "photo.on.rectangle":page.symbol}
+    private func row(_ page:ToolPage)->some View {
+        Button{model.page = page == .voice ? .history:page} label:{
+            HStack(spacing:11) {
+                Image(systemName:page.symbol).foregroundStyle(page.color == .secondary ? Color.gray:page.color).frame(width:22)
+                Text(title(page));Spacer(minLength:0)
+                if page == .settings && model.updates.available != nil {Text("1").font(.system(size:11,weight:.bold)).foregroundStyle(.white).padding(.horizontal,7).padding(.vertical,2).background(Capsule().fill(Color.red)).help("An update is available")}
+            }
+            .padding(.horizontal,10).frame(maxWidth:.infinity,minHeight:36,alignment:.leading).contentShape(Rectangle())
+            .background(current == page ? .white.opacity(0.09):.clear,in:RoundedRectangle(cornerRadius:9))
+        }.buttonStyle(.plain)
+    }
     var body:some View {
         HStack(spacing:0) {
-            VStack(spacing:0) {
-                List(selection:Binding(get:{current},set:{if let page=$0 {model.page = page == .voice ? .history:page}})) {
-                    ForEach(pages) {page in Label(title(page),systemImage:symbol(page)).tag(page)}
-                }
-                .listStyle(.sidebar).scrollContentBackground(.hidden)
-                Button{model.page = .settings} label:{
-                    HStack(spacing:8) {
-                        Image(systemName:"gearshape").foregroundStyle(.secondary).frame(width:20)
-                        Text("Settings");Spacer(minLength:0)
-                        if model.updates.available != nil {Text("1").font(.system(size:11,weight:.bold)).foregroundStyle(.white).padding(.horizontal,7).padding(.vertical,1).background(Capsule().fill(Color.red)).help("An update is available")}
-                    }
-                    .padding(.horizontal,10).frame(height:28).contentShape(Rectangle())
-                    .background(current == .settings ? Color.white.opacity(0.1):.clear,in:RoundedRectangle(cornerRadius:6))
-                }.buttonStyle(.plain).padding(.horizontal,10).padding(.bottom,12)
+            // Glass sidebar card with the coloured tool icons; Settings pinned to the bottom.
+            VStack(alignment:.leading,spacing:4) {
+                ForEach(pages) {page in row(page)}
+                Spacer()
+                row(.settings)
             }
-            .frame(width:200)
-            Divider()
+            .padding(12).frame(width:212)
+            .background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:22))
+            .overlay{RoundedRectangle(cornerRadius:22).strokeBorder(.white.opacity(0.12),lineWidth:1)}
+            .padding(8)
             VStack(spacing:0) {
-                VStack(alignment:.leading,spacing:5) {
+                if current != .home {
                     Text(title(current)).font(.system(size:22,weight:.semibold))
-                    Text(subtitle).font(.callout).foregroundStyle(.secondary)
-                }.frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,28).padding(.top,18).padding(.bottom,16)
+                        .frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,28).padding(.top,22).padding(.bottom,16)
+                }
                 if current == .settings {settings} else {ScrollView{content.padding(.horizontal,28).padding(.bottom,28)}.id(model.recoveryID)}
-                Divider()
-                Text(model.notice).font(.caption).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading).padding(13)
+                if current != .home {
+                    Divider()
+                    Text(model.notice).font(.caption).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading).padding(13)
+                }
             }.background(Color.black.opacity(0.12))
         }
         .frame(minWidth:960,minHeight:700).preferredColorScheme(.dark).toggleStyle(.switch).tint(.blue)
-    }
-    var subtitle:String {
-        switch current {
-        case .home:return "Your week at a glance, counted on this Mac."
-        case .voice:return "Your transcriptions and the corrections OpenToolkit has learned."
-        case .capture:return "Your recent screenshots. Drag one into any app, keep it, or save it."
-        case .organizer:return "A place for quick thoughts and timely nudges."
-        default:return "Shortcuts, tools and permissions."
-        }
     }
     @ViewBuilder var content:some View {
         switch current {

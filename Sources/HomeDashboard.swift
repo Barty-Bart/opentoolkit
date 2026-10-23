@@ -12,11 +12,15 @@ struct HomeDashboard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(headline).font(.system(size: 22, weight: .semibold))
+                    Text(dateRange).font(.callout).foregroundStyle(.secondary)
+                }
                 Spacer()
                 Picker("Period", selection: $stats.period) { ForEach(HomePeriod.allCases) { Text($0.rawValue).tag($0) } }
                     .pickerStyle(.segmented).frame(width: 240).labelsHidden()
-            }
+            }.padding(.top, 4)
             if !enabled {
                 ToolCard(title: "Usage summary is off", subtitle: "Turn it on to see your week here. It's counted on this Mac and never leaves it.") {
                     Button("Show usage on Home") { enabled = true; stats.refresh() }
@@ -34,6 +38,15 @@ struct HomeDashboard: View {
         .onReceive(refresh) { _ in stats.refresh() }
     }
 
+    private var headline: String { switch stats.period { case .today: return "Today"; case .week: return "Your week"; case .month: return "This month" } }
+    private var dateRange: String {
+        let calendar = Calendar.current, now = Date()
+        guard let interval = calendar.dateInterval(of: stats.period.component, for: now) else { return "" }
+        let f = DateFormatter(); f.setLocalizedDateFormatFromTemplate(stats.period == .month ? "MMMM yyyy" : "EEE d MMM")
+        if stats.period == .today { return f.string(from: now) }
+        if stats.period == .month { return f.string(from: now) }
+        return f.string(from: interval.start) + " – " + f.string(from: interval.end.addingTimeInterval(-1))
+    }
     private var periodPhrase: String { switch stats.period { case .today: return "Today"; case .week: return "This week"; case .month: return "This month" } }
     private var previousPhrase: String { switch stats.period { case .today: return "yesterday"; case .week: return "last week"; case .month: return "last month" } }
 
@@ -53,40 +66,41 @@ struct HomeDashboard: View {
                     Chart(s.apps, id: \.name) { app in
                         BarMark(x: .value("Words", app.words), y: .value("App", app.name)).foregroundStyle(Color.cyan.gradient)
                             .annotation(position: .trailing) { Text(app.words.formatted()).font(.caption).foregroundStyle(.secondary) }
-                    }.chartXAxis(.hidden).frame(height: 170)
+                    }.chartXAxis(.hidden).frame(height: CGFloat(s.apps.count) * 26 + 8)
                 }
             }
-        }
+        }.fixedSize(horizontal: false, vertical: true)
         HStack(alignment: .top, spacing: 12) {
-            ToolCard(title: "Words you say most", subtitle: "Common words like \u{201C}the\u{201D} are left out") {
+            ToolCard(title: "Words you say most", subtitle: "") {
                 if s.topWords.isEmpty { Text("Not enough dictation yet.").foregroundStyle(.secondary) }
                 else {
-                    FlowRow(s.topWords) { word in
-                        Text(word).font(.callout.weight(.medium)).padding(.horizontal, 10).padding(.vertical, 5).background(.white.opacity(0.08), in: Capsule())
+                    FlowRow(Array(s.topWords.prefix(8))) { word in
+                        Text(word).font(.caption.weight(.medium)).padding(.horizontal, 8).padding(.vertical, 4).background(.white.opacity(0.08), in: Capsule())
                     }
                 }
             }
-            ToolCard(title: "Dictation habits", subtitle: "\(s.dictations.formatted()) dictation\(s.dictations == 1 ? "" : "s")") {
+            ToolCard(title: "Dictation habits", subtitle: "") {
+                fact("Dictations", s.dictations.formatted())
                 fact("Speaking speed", s.wordsPerMinute.map { "\($0) wpm" } ?? "—")
                 fact("Longest dictation", s.longestSeconds > 0 ? duration(s.longestSeconds) : "—")
-                fact("Corrections learned", s.correctionsLearned.formatted())
             }
-            ToolCard(title: "Tools you used", subtitle: periodPhrase) {
+            ToolCard(title: "Tools you used", subtitle: "") {
                 fact("Hey Toolkit commands", s.wakeCommands.formatted())
                 fact("Screenshots copied or saved", s.exports.formatted())
-                fact("Time drawing on screen", s.drawingSeconds > 0 ? duration(s.drawingSeconds) : "—")
+                fact("Corrections learned", s.correctionsLearned.formatted())
             }
-        }
-        Text("Counted on this Mac only. Turn this off or reset it in Settings.").font(.caption).foregroundStyle(.secondary)
+        }.fixedSize(horizontal: false, vertical: true)
     }
 
     private func tile(_ title: String, _ value: String, _ detail: String, _ accent: Color, action: (String, () -> Void)? = nil) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack { Text(title).font(.caption).foregroundStyle(.secondary); Spacer()
                 if let action { Button(action.0, action: action.1).buttonStyle(.link).font(.caption2).help("Type a short paragraph to measure your real typing speed") } }
-            Text(value).font(.system(size: 26, weight: .semibold, design: .rounded)).foregroundStyle(accent).lineLimit(1).minimumScaleFactor(0.6)
+            Text(value).font(.system(size: 26, weight: .semibold, design: .rounded)).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.6)
             Text(detail.isEmpty ? " " : detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(14).background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .overlay { RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.06), lineWidth: 1) }
     }
     private func fact(_ label: String, _ value: String) -> some View {
         HStack { Text(label).foregroundStyle(.secondary); Spacer(); Text(value).monospacedDigit() }.font(.callout)
