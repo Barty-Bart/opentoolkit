@@ -7,6 +7,7 @@ struct VoiceCommandsView: View {
     private var prefix: String { voice.settings.wakePhrase ?? VoiceSettings.defaultWakePhrase }
     var body: some View {
         ToolCard(title: "Hey Toolkit", subtitle: "Wake first. Choose an action. Then speak.", accent: .mint) {
+            Toggle("Glow around the pointer while listening for a command", isOn: Binding(get: { PointerGlow.enabled }, set: { PointerGlow.enabled = $0; voice.objectWillChange.send() }))
             HStack(spacing: 12) {
                 Label(prefix.capitalized, systemImage: "waveform").font(.title3.weight(.semibold))
                 Image(systemName: "chevron.right").foregroundStyle(.secondary)

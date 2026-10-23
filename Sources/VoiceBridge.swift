@@ -115,7 +115,10 @@ struct VoiceEvent: Decodable {
             try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
             if !FileManager.default.fileExists(atPath:log.path){try Data().write(to:log)}
             try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:log.path)
-            let values:[String:Any] = ["Label":"local.pico.speech","ProgramArguments":[helper.path],"RunAtLoad":false,"KeepAlive":false,"StandardOutPath":log.path,"StandardErrorPath":log.path,"Umask":63,"EnvironmentVariables":["TOKENIZERS_PARALLELISM":"false"]]
+            let values:[String:Any] = ["Label":"local.pico.speech","ProgramArguments":[helper.path],
+                // Attribute the background item to OpenToolkit; without this macOS lists it under the
+                // signing certificate's personal name in Login Items & Extensions.
+                "AssociatedBundleIdentifiers":["local.pico"],"RunAtLoad":false,"KeepAlive":false,"StandardOutPath":log.path,"StandardErrorPath":log.path,"Umask":63,"EnvironmentVariables":["TOKENIZERS_PARALLELISM":"false"]]
             try PropertyListSerialization.data(fromPropertyList:values,format:.xml,options:0).write(to:agent,options:.atomic)
             try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:agent.path)
             let service=self.service,agentPath=agent.path

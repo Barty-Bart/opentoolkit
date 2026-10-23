@@ -188,6 +188,10 @@ class RecoveryEventTapTests(unittest.TestCase):
 
 class VoiceTests(unittest.TestCase):
     def setUp(self):
+        # Never consult the real frontmost app: without this, recovery and delivery tests
+        # depend on whatever is in front on the machine running them.
+        patch.object(v, 'unreported_focus', return_value=None).start()
+        self.addCleanup(patch.stopall)
         self.temp = tempfile.TemporaryDirectory(prefix="multitool-voice-test-")
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)

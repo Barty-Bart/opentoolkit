@@ -327,7 +327,7 @@ struct ContinuousView:View {
     func applicationDidFinishLaunching(_ notification:Notification){
         NSApp.setActivationPolicy(.regular)
         installMainMenu()
-        model=AppModel();model.hotkeys=Hotkeys();model.updates.startAutomaticChecks();if UserDefaults.standard.bool(forKey:"setupComplete"){model.registerHotkeys();if model.voice.settings.dictationEnabled {model.voice.startSpeech()}}
+        model=AppModel();model.hotkeys=Hotkeys();model.updates.startAutomaticChecks();pointerGlow.bind(to:model.voice);if UserDefaults.standard.bool(forKey:"setupComplete"){model.registerHotkeys();if model.voice.settings.dictationEnabled {model.voice.startSpeech()}}
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1050,height:788),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         window.appearance=NSAppearance(named:.darkAqua)
         window.backgroundColor=NSColor(calibratedRed:0.13,green:0.15,blue:0.16,alpha:1)
@@ -351,7 +351,7 @@ struct ContinuousView:View {
         window.center();window.minSize=NSSize(width:960,height:728)
         model.showWindow={ [weak self] in self?.show() }
         statusItem=NSStatusBar.system.statusItem(withLength:NSStatusItem.variableLength)
-        statusItem.button?.image=NSImage(systemSymbolName:"command",accessibilityDescription:"OpenToolkit")
+        statusItem.button?.image=Self.menuBarSymbol()
         statusItem.button?.imagePosition = .imageLeading
         // Rebuilt on every open so shortcuts, recording/drawing state and the wake
         // checkmark always match the current settings.
@@ -417,6 +417,7 @@ struct ContinuousView:View {
             let phrase=(model.voice.settings.wakePhrase ?? "").trimmingCharacters(in:.whitespaces)
             let wake=NSMenuItem(title:"Listen for “\(phrase.isEmpty ? "Hey Toolkit":phrase.capitalized)”",action:#selector(toggleWake),keyEquivalent:"")
             wake.target=self;wake.state=model.voice.settings.wakeEnabled ? .on:.off;menu.addItem(wake)
+            tool("Customize Hey Toolkit Commands…","page:voice")
         }
         menu.addItem(.separator())
         if model.enabled("screenshots") {tool("Screenshot History…","page:screenshotHistory")}
@@ -435,18 +436,24 @@ struct ContinuousView:View {
         if flags & UInt32(controlKey) != 0 {mask.insert(.control)};if flags & UInt32(shiftKey) != 0 {mask.insert(.shift)}
         return mask
     }
+    /// Menu-bar ⌘, sized like other menu-bar icons (the default symbol size looked small).
+    static func menuBarSymbol()->NSImage? {
+        let image=NSImage(systemSymbolName:"command",accessibilityDescription:"OpenToolkit")?.withSymbolConfiguration(.init(pointSize:16,weight:.semibold))
+        image?.isTemplate=true;return image
+    }
+    private let pointerGlow=PointerGlow()
     private var badgeShown:Bool?
     /// A small red dot on the menu-bar icon and a Dock badge while an update is waiting (no flashing).
     func showUpdateBadge(_ visible:Bool){
         guard badgeShown != visible else{return};badgeShown=visible
         NSApp.dockTile.badgeLabel=visible ? "1":nil
-        guard let symbol=NSImage(systemSymbolName:"command",accessibilityDescription:"OpenToolkit") else{return}
-        guard visible else{symbol.isTemplate=true;statusItem.button?.image=symbol;return}
-        let size=NSSize(width:18,height:16)
+        guard let symbol=Self.menuBarSymbol() else{return}
+        guard visible else{statusItem.button?.image=symbol;return}
+        let size=NSSize(width:symbol.size.width+5,height:symbol.size.height+2)
         let image=NSImage(size:size,flipped:false){rect in
             // Drawn on demand, so the symbol follows the menu bar's light or dark appearance.
             let tinted=symbol.copy() as! NSImage;tinted.isTemplate=false
-            let glyph=NSRect(x:0,y:0,width:16,height:16)
+            let glyph=NSRect(x:0,y:1,width:symbol.size.width,height:symbol.size.height)
             tinted.draw(in:glyph);NSColor.labelColor.set();glyph.fill(using:.sourceAtop)
             NSColor.systemRed.setFill();NSBezierPath(ovalIn:NSRect(x:rect.maxX-7,y:rect.maxY-7,width:7,height:7)).fill()
             return true
@@ -469,6 +476,7 @@ struct ContinuousView:View {
         case "clearDrawing":model.capture.clearAnnotations()
         case "page:screenshotHistory":model.capture.showRecentHistory()
         case "page:dictationHistory":model.page = .history;show()
+        case "page:voice":model.page = .voice;show()
         default:model.perform(action)
         }
     }
