@@ -11,6 +11,17 @@ from PyObjCTools import AppHelper
 from wake_engine import Detector, MODEL, validate_phrase, command_phrases, detector_phrases, migrate_voice_branding
 from runtime_paths import speech_data, speech_resources
 log=logging.getLogger('multitool.voice')
+
+def microphone_access():
+    """This process's microphone permission: 0 not asked, 1 restricted, 2 denied, 3 allowed."""
+    try:
+        import AVFoundation
+        return int(AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(AVFoundation.AVMediaTypeAudio))
+    except Exception:
+        return None
+
+def write_state(root, state):
+    tmp=root/'state.tmp';tmp.write_text(json.dumps(state));tmp.chmod(0o600);tmp.replace(root/'state.json')
 class RecoveryGesture:
     """Wait after tap two so a third tap opens history without pasting."""
     def __init__(self):
@@ -363,13 +374,14 @@ class VoiceControl:
         state={'time':time.time(),'status':self.status,'recording':self.d.recording,'busy':self.d.busy,'wake':self.enabled,'awaitingCommand':self.command_session.active(time.monotonic(),self.epoch),'microphone':self.mic_ready,'detectorReady':self.detector_ready,'mode':self.long_mode or self.capture_mode,'level':float(self.d.level),'segmentPending':self.segment_pending}
         state['keyListenerReady']=bool(getattr(self.d,'key_listener_ready',False))
         state['accessibilityGranted']=bool(AXIsProcessTrusted())
+        state['microphoneAccess']=microphone_access()
         if not state['keyListenerReady'] and not self.d.recording and not self.d.busy:
             state['status']='Fn unavailable — enable OpenToolkit Speech in System Settings → Privacy & Security → Accessibility'
         transcriber=getattr(self.d,'transcriber',None)
         state['compute']=getattr(transcriber,'name','Loading speech model…')
         state['fallback']=bool(getattr(transcriber,'fallback',False))
         if self.d.busy and time.monotonic()-getattr(self.d,'busy_since',time.monotonic())>45:state['status']='Transcription is taking longer than usual. Reset speech if needed.'
-        tmp=self.root/'state.tmp';tmp.write_text(json.dumps(state));tmp.chmod(0o600);tmp.replace(self.root/'state.json')
+        write_state(self.root,state)
     def command(self,action,c=None):
         c=c or {}
         if action=='watch_practice':

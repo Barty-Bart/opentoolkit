@@ -3,6 +3,10 @@ import Combine
 
 struct SpeechState: Decodable {
     var accessibilityGranted: Bool? = nil
+    /// The speech helper's own microphone permission: 0 not asked, 1 restricted, 2 denied, 3 allowed.
+    var microphoneAccess: Int? = nil
+    /// True while the speech model is still loading or downloading.
+    var loading: Bool? = nil
     var keyListenerReady: Bool? = nil
     var compute: String? = nil
     var fallback: Bool? = nil
@@ -84,11 +88,16 @@ struct VoiceEvent: Decodable {
         return bundled || FileManager.default.isExecutableFile(atPath:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pico/Speech/venv/bin/python").path)
     }
     private var service:String {"gui/\(getuid())/local.pico.speech"}
-    @discardableResult private func launchctl(_ arguments:[String])->Bool {
+    /// launchctl can wait many seconds for the old worker to exit; never run it on the main thread.
+    nonisolated private static func launchctl(_ arguments:[String])->Bool {
         let process=Process();process.executableURL=URL(fileURLWithPath:"/bin/launchctl");process.arguments=arguments
         process.standardOutput=FileHandle.nullDevice;process.standardError=FileHandle.nullDevice
         do{try process.run();process.waitUntilExit();return process.terminationStatus==0}catch{return false}
     }
+    @discardableResult private func launchctl(_ arguments:[String]) async ->Bool {
+        await Task.detached(priority:.userInitiated){Self.launchctl(arguments)}.value
+    }
+    @Published var restarting=false
     func startSpeech() {
         guard runtimeInstalled else{error="Install the speech runtime using the CLI installer first.";return}
         let helper=Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/OpenToolkit Speech.app/Contents/MacOS/OpenToolkitSpeech")
@@ -109,22 +118,31 @@ struct VoiceEvent: Decodable {
             let values:[String:Any] = ["Label":"local.pico.speech","ProgramArguments":[helper.path],"RunAtLoad":false,"KeepAlive":false,"StandardOutPath":log.path,"StandardErrorPath":log.path,"Umask":63,"EnvironmentVariables":["TOKENIZERS_PARALLELISM":"false"]]
             try PropertyListSerialization.data(fromPropertyList:values,format:.xml,options:0).write(to:agent,options:.atomic)
             try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:agent.path)
-            if !launchctl(["print",service]) {_ = launchctl(["bootstrap","gui/\(getuid())",agent.path])}
-            guard launchctl(["kickstart",service]) else{error="Could not start speech. Check the local speech log in Settings.";return}
+            let service=self.service,agentPath=agent.path
             state.status="Starting local speech; first use may download the model…";error=""
+            Task{
+                if !(await launchctl(["print",service])) {_ = await launchctl(["bootstrap","gui/\(getuid())",agentPath])}
+                if !(await launchctl(["kickstart",service])) {error="Could not start speech. Check the local speech log in Settings."}
+            }
         }catch{self.error=error.localizedDescription}
     }
     func stopSpeech() {
         guard !state.recording && !state.busy && !["ambient","meeting"].contains(state.mode) else{error="Finish the current capture before stopping speech.";return}
         settings.wakeEnabled=false;persist()
-        _ = launchctl(["bootout",service]);connected=false;state.status="Speech stopped"
+        let service=self.service;Task{_ = await launchctl(["bootout",service])};connected=false;state.status="Speech stopped"
     }
     func reset() {
         guard !state.recording && !state.busy && !["ambient","meeting"].contains(state.mode) else{error="Finish the current capture before resetting speech.";return}
         // Reset repairs speech without silently turning the user's wake setting off.
         let marker=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pico/Speech/voice-commands.disabled")
         if settings.wakeEnabled {try? FileManager.default.removeItem(at:marker)}
-        if launchctl(["print",service]) {_ = launchctl(["kickstart","-k",service]);state.status="Restarting speech…"}else{startSpeech()}
+        guard !restarting else{return}
+        restarting=true;state.status="Restarting speech…"
+        let service=self.service
+        Task{
+            if await launchctl(["print",service]) {_ = await launchctl(["kickstart","-k",service])}else{startSpeech()}
+            restarting=false
+        }
     }
     private func poll() {
         if let data=try? Data(contentsOf:root.appendingPathComponent("state.json")),let state=try? JSONDecoder().decode(SpeechState.self,from:data) {

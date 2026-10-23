@@ -905,3 +905,23 @@ class ClipboardRestoreTests(unittest.TestCase):
             env['paste']('transcript'); board.items = [{'x': b'new copy'}]; board.count += 1
             restores[0]()
         self.assertEqual(board.items, [{'x': b'new copy'}])
+
+
+class EarlyStatusTests(unittest.TestCase):
+    """The worker reports permissions before the model loads; synthetic folder only."""
+    def test_state_is_written_atomically_and_privately(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            v.write_state(root, {'time': 1.0, 'accessibilityGranted': True, 'microphoneAccess': 3, 'loading': True})
+            path = root / 'state.json'
+            self.assertEqual(json.loads(path.read_text())['microphoneAccess'], 3)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertFalse((root / 'state.tmp').exists())
+
+    def test_microphone_access_reports_a_real_permission_value(self):
+        self.assertIn(v.microphone_access(), (0, 1, 2, 3, None))
+
+    def test_worker_starts_reporting_before_waiting_for_the_model(self):
+        source = (ROOT / 'Voice' / 'dictate.py').read_text()
+        main = source[source.index('def main():'):]
+        self.assertLess(main.index('threading.Thread(target=early_heartbeat'), main.index('dictation.ready.wait()\n'))

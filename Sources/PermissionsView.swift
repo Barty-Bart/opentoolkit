@@ -11,6 +11,17 @@ struct PermissionsView: View {
     @State private var recordingMic = AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var message = ""
     private let refresh = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    /// The helper's real microphone permission, not whether a microphone stream happens to be open.
+    private var micReady: Bool { voice.connected && (voice.state.microphoneAccess.map { $0 == 3 } ?? voice.state.microphone) }
+    private var micStatus: String {
+        guard voice.connected else { return "Start speech to check" }
+        switch voice.state.microphoneAccess {
+        case 3: return "Allowed"
+        case 2, 1: return "Denied — allow in Settings"
+        case 0: return "Not asked yet"
+        default: return voice.state.microphone ? "Input ready" : "Input unavailable"
+        }
+    }
     private func settings(_ page: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_" + page) {
             NSWorkspace.shared.open(url)
@@ -42,7 +53,7 @@ struct PermissionsView: View {
                 settings("ScreenCapture")
             }
             Divider()
-            row("Microphone for dictation", "OpenToolkit Speech · your voice stays on this Mac", voice.connected ? (voice.state.microphone ? "Input ready" : "Input unavailable") : "Start speech to check", ready: voice.connected && voice.state.microphone) {
+            row("Microphone for dictation", "OpenToolkit Speech · your voice stays on this Mac", micStatus, ready: micReady) {
                 if !voice.connected { voice.startSpeech() }
                 settings("Microphone")
             }
@@ -50,7 +61,9 @@ struct PermissionsView: View {
                 if !voice.connected { voice.startSpeech() }
                 settings("Accessibility")
             }
-            Text(voice.connected && voice.state.keyListenerReady == true ? "Fn listener is running." : "Fn listener is not ready. After granting Accessibility, use Restart speech below.")
+            Text(voice.connected && voice.state.keyListenerReady == true ? "Fn listener is running."
+                 : voice.state.loading == true ? "Fn becomes ready as soon as the speech model has loaded. The first launch downloads it, which can take a few minutes."
+                 : "Fn listener is not ready yet. It starts by itself within a few seconds of allowing Accessibility.")
                 .font(.caption).foregroundStyle(.secondary)
             Divider()
             row("Microphone for screen recordings", "OpenToolkit · optional voiceover when recording video", recordingMic == .authorized ? "Allowed" : "Optional", ready: recordingMic == .authorized) {
@@ -58,8 +71,9 @@ struct PermissionsView: View {
                 settings("Microphone")
             }
             HStack {
-                Button("Restart speech") { voice.reset() }
-                    .disabled(voice.state.recording || voice.state.busy || ["meeting", "ambient"].contains(voice.state.mode))
+                Button(voice.restarting ? "Restarting…" : "Restart speech") { voice.reset() }
+                    .disabled(voice.restarting || voice.state.loading == true || voice.state.recording || voice.state.busy || ["meeting", "ambient"].contains(voice.state.mode))
+                    .help(voice.state.loading == true ? "Speech is still loading; restarting now would start the model download again." : "Restart the speech helper")
                 Button("Show installed speech helper") {
                     NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/OpenToolkit Speech.app")])
                 }

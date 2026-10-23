@@ -963,6 +963,24 @@ def main():
     for running in ws.runningApplications():
         if running.activationPolicy() == 0:  # regular apps with windows
             enable_app_accessibility(running.processIdentifier())
+    # Report permissions while the model loads (the first launch downloads it), so the
+    # app's permission rows update at once and nobody needs to restart speech mid-download.
+    def early_heartbeat():
+        from voice_control import microphone_access, write_state
+        from ApplicationServices import AXIsProcessTrusted
+        root = Path.home() / 'Library/Application Support/Pico/VoiceBridge'
+        root.mkdir(parents=True, exist_ok=True)
+        while not dictation.ready.is_set():
+            try:
+                write_state(root, {'time': time.time(), 'status': 'Preparing speech: loading the speech model (the first launch downloads it)…',
+                                   'recording': False, 'busy': False, 'wake': False, 'microphone': False, 'detectorReady': False,
+                                   'mode': 'dictation', 'level': 0.0, 'keyListenerReady': False, 'loading': True,
+                                   'accessibilityGranted': bool(AXIsProcessTrusted()), 'microphoneAccess': microphone_access(),
+                                   'compute': 'Loading speech model…'})
+            except OSError:
+                log.exception('Could not report speech status')
+            dictation.ready.wait(1)
+    threading.Thread(target=early_heartbeat, daemon=True).start()
     dictation.ready.wait()
 
     from voice_control import VoiceControl
