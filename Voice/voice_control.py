@@ -381,6 +381,8 @@ class VoiceControl:
         state['compute']=getattr(transcriber,'name','Loading speech model…')
         state['fallback']=bool(getattr(transcriber,'fallback',False))
         if self.d.busy and time.monotonic()-getattr(self.d,'busy_since',time.monotonic())>45:state['status']='Transcription is taking longer than usual. Reset speech if needed.'
+        model_error=getattr(self.d,'model_error',None)
+        if model_error:state['status']=model_error;state['modelError']=True
         write_state(self.root,state)
     def command(self,action,c=None):
         c=c or {}

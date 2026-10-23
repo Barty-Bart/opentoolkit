@@ -650,18 +650,30 @@ class Dictation:
         if sound is not None:sound.stop()
         self.loop_sound=None;self.feedback_started=False
 
+    # A first-launch download can be interrupted (sleep, Wi-Fi). Retry by itself;
+    # Hugging Face resumes partial files, so each attempt continues the download.
+    LOAD_RETRY_SECONDS = (15, 30, 60, 120, 300)
+
     def _worker(self):
         # MLX state is per thread, so this one thread loads the model and does every transcription.
-        try:
-            t = time.time()
-            self.transcriber = Transcriber(_engine_config, lambda text: AppHelper.callAfter(lambda: self.voice_control.label(text)))
-            log.info("loaded %s in %.1fs", self.transcriber.name, time.time() - t)
-        except Exception:
-            log.exception("could not load the model")
-            self.model_error = "Speech model failed to load. Check connection/model settings, then restart speech."
-            self.ready.set()
-            AppHelper.callAfter(lambda: self.voice_control.label(self.model_error))
-            return
+        attempts = len(self.LOAD_RETRY_SECONDS) + 1
+        for attempt in range(attempts):
+            try:
+                t = time.time()
+                self.transcriber = Transcriber(_engine_config, lambda text: AppHelper.callAfter(lambda: self.voice_control.label(text)))
+                log.info("loaded %s in %.1fs", self.transcriber.name, time.time() - t)
+                break
+            except Exception:
+                log.exception("could not load the model (attempt %d of %d)", attempt + 1, attempts)
+                if attempt + 1 == attempts:
+                    self.model_error = "Speech model failed to load after several tries. Check your internet connection, then use Restart speech."
+                    self.ready.set()
+                    AppHelper.callAfter(lambda: self.voice_control.label(self.model_error))
+                    return
+                delay = self.LOAD_RETRY_SECONDS[attempt]
+                self.load_status = f"Speech model download was interrupted. Retrying in {delay} s (attempt {attempt + 2} of {attempts})…"
+                time.sleep(delay)
+                self.load_status = None
         self.ready.set()
         while True:
             audio, app = self.jobs.get()
@@ -929,6 +941,28 @@ def make_tap(dictation):
 
 # --- permissions ----------------------------------------------------------
 
+def model_download_bytes(cache=None):
+    """Bytes of partial model downloads in the Hugging Face cache (0 when nothing is downloading)."""
+    if cache is None:
+        cache = Path(os.environ.get('HF_HUB_CACHE') or Path(os.environ.get('HF_HOME', Path.home() / '.cache/huggingface')) / 'hub')
+    total = 0
+    for part in Path(cache).rglob('*.incomplete'):
+        try:
+            total += part.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def loading_status(retry_message=None, cache=None):
+    if retry_message:
+        return retry_message
+    downloaded = model_download_bytes(cache)
+    if downloaded:
+        return f'Downloading the speech model (first launch only)… {downloaded // 1_000_000:,} MB so far'
+    return 'Preparing speech: loading the speech model (the first launch downloads it)…'
+
+
 def ensure_permissions():
     AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
         AVFoundation.AVMediaTypeAudio, lambda granted: log.info("microphone access: %s", granted))
@@ -972,7 +1006,7 @@ def main():
         root.mkdir(parents=True, exist_ok=True)
         while not dictation.ready.is_set():
             try:
-                write_state(root, {'time': time.time(), 'status': 'Preparing speech: loading the speech model (the first launch downloads it)…',
+                write_state(root, {'time': time.time(), 'status': loading_status(getattr(dictation, 'load_status', None)),
                                    'recording': False, 'busy': False, 'wake': False, 'microphone': False, 'detectorReady': False,
                                    'mode': 'dictation', 'level': 0.0, 'keyListenerReady': False, 'loading': True,
                                    'accessibilityGranted': bool(AXIsProcessTrusted()), 'microphoneAccess': microphone_access(),

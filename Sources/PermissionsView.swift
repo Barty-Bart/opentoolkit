@@ -61,8 +61,9 @@ struct PermissionsView: View {
                 if !voice.connected { voice.startSpeech() }
                 settings("Accessibility")
             }
-            Text(voice.connected && voice.state.keyListenerReady == true ? "Fn listener is running."
-                 : voice.state.loading == true ? "Fn becomes ready as soon as the speech model has loaded. The first launch downloads it, which can take a few minutes."
+            Text(voice.state.modelError == true ? "The speech model didn't finish downloading. Check your internet connection, then click Try again; the download continues where it stopped."
+                 : voice.connected && voice.state.keyListenerReady == true ? "Fn listener is running."
+                 : voice.state.loading == true ? "\(voice.state.status) Fn becomes ready as soon as the speech model has loaded; if the download is interrupted, OpenToolkit retries by itself."
                  : "Fn listener is not ready yet. It starts by itself within a few seconds of allowing Accessibility.")
                 .font(.caption).foregroundStyle(.secondary)
             Divider()
@@ -71,7 +72,7 @@ struct PermissionsView: View {
                 settings("Microphone")
             }
             HStack {
-                Button(voice.restarting ? "Restarting…" : "Restart speech") { voice.reset() }
+                Button(voice.restarting ? "Restarting…" : voice.state.modelError == true ? "Try again" : "Restart speech") { voice.reset() }
                     .disabled(voice.restarting || voice.state.loading == true || voice.state.recording || voice.state.busy || ["meeting", "ambient"].contains(voice.state.mode))
                     .help(voice.state.loading == true ? "Speech is still loading; restarting now would start the model download again." : "Restart the speech helper")
                 Button("Show installed speech helper") {

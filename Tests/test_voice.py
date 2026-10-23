@@ -796,6 +796,7 @@ class VoiceTests(unittest.TestCase):
         d = cls.__new__(cls); d.voice_control = self.c; d.ready = threading.Event()
         env["_engine_config"] = {}
         env["Transcriber"] = Mock(side_effect=RuntimeError("synthetic load failure"))
+        env["time"] = types.SimpleNamespace(time=time.time, monotonic=time.monotonic, sleep=lambda seconds: None)
         d._worker()
         self.assertTrue(d.ready.is_set())
         self.assertIn("failed to load",d.model_error)
@@ -909,6 +910,66 @@ class ClipboardRestoreTests(unittest.TestCase):
             env['paste']('transcript'); board.items = [{'x': b'new copy'}]; board.count += 1
             restores[0]()
         self.assertEqual(board.items, [{'x': b'new copy'}])
+
+
+class ModelDownloadRetryTests(unittest.TestCase):
+    """An interrupted first-launch download retries by itself; no network or model is used."""
+    def run_worker(self, failures):
+        Dictation, env = dictation_class()
+        calls, sleeps = [], []
+        class FakeTranscriber:
+            name = "Fake"
+            def __init__(self, config, label):
+                calls.append(config)
+                if len(calls) <= failures:
+                    raise OSError("connection reset during download")
+        env.update(Transcriber=FakeTranscriber, _engine_config={},
+                   time=types.SimpleNamespace(time=time.time, monotonic=time.monotonic, sleep=sleeps.append))
+        d = Dictation.__new__(Dictation)
+        d.ready = threading.Event()
+        d.jobs = queue.Queue()
+        d.voice_control = Mock()
+        threading.Thread(target=d._worker, daemon=True).start()
+        self.assertTrue(d.ready.wait(5))
+        return d, calls, sleeps
+
+    def test_interrupted_download_retries_and_then_loads(self):
+        d, calls, sleeps = self.run_worker(failures=2)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sleeps, [15, 30])
+        self.assertIsNone(getattr(d, "model_error", None))
+        self.assertIsNone(d.load_status)
+        self.assertEqual(d.transcriber.name, "Fake")
+
+    def test_gives_up_after_every_retry_with_a_clear_message(self):
+        d, calls, sleeps = self.run_worker(failures=99)
+        self.assertEqual(len(calls), len(d.LOAD_RETRY_SECONDS) + 1)
+        self.assertEqual(sleeps, list(d.LOAD_RETRY_SECONDS))
+        self.assertIn("Restart speech", d.model_error)
+        d.voice_control.label.assert_called_with(d.model_error)
+
+    def loading_functions(self):
+        source = ast.parse((ROOT / "Voice" / "dictate.py").read_text())
+        keep = [n for n in source.body if isinstance(n, ast.FunctionDef) and n.name in ("model_download_bytes", "loading_status")]
+        env = dict(os=__import__("os"), Path=Path)
+        exec(compile(ast.Module(body=keep, type_ignores=[]), "dictate.py loading", "exec"), env)
+        return env
+
+    def test_status_reports_partial_download_size(self):
+        env = self.loading_functions()
+        with tempfile.TemporaryDirectory() as folder:
+            blobs = Path(folder) / "models--example--model" / "blobs"
+            blobs.mkdir(parents=True)
+            self.assertIn("Preparing speech", env["loading_status"](cache=folder))
+            (blobs / "abc.incomplete").write_bytes(b"x" * 2_500_000)
+            (blobs / "done").write_bytes(b"x" * 9_000_000)
+            self.assertEqual(env["model_download_bytes"](folder), 2_500_000)
+            self.assertIn("2 MB so far", env["loading_status"](cache=folder))
+            self.assertEqual(env["loading_status"]("Retrying in 15 s", cache=folder), "Retrying in 15 s")
+
+    def test_final_failure_is_reported_to_the_app(self):
+        source = (ROOT / "Voice" / "voice_control.py").read_text()
+        self.assertIn("state['modelError']=True", source)
 
 
 class EarlyStatusTests(unittest.TestCase):

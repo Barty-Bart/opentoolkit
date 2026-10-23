@@ -51,6 +51,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var previewsHidden=false
     private var pinnedPreviews:[NSPanel]=[]
     private var editors: [CaptureEditorController] = []
+    /// The app you were in when an editor opened; closing the last editor returns there.
+    private var appBeforeEditing: NSRunningApplication?
+    /// The display holding the thumbnail stack; it follows the pointer between displays.
+    private var trayScreen: NSScreen?
+    private var trayFollow: Timer?
     var hasOpenEditor: Bool { editors.contains { $0.window?.isVisible == true } }
     private var captureInFlight = false
     /// Usage-log kind of the capture in flight; full screen and area share the capture path.
@@ -183,7 +188,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                         CaptureSound.play()
                         UsageLog.shared?.record(self.captureKind)
                         self.showTray()
-                        self.report("Screenshot ready · drag the thumbnail into an app, or click to edit")
+                        self.report("Screenshot ready · drag the thumbnail into an app, or double-click to edit")
                     } else {
                         try? FileManager.default.removeItem(at: output)
                         self.showTray()
@@ -315,12 +320,16 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     func openEditor(_ item: CaptureItem) {
         if let existing = editors.first(where: { $0.item.url == item.url }) { existing.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
         guard let image = NSImage(contentsOf: item.url) else { report("This capture is no longer available."); return }
+        if editors.isEmpty, let front = NSWorkspace.shared.frontmostApplication, front != .current { appBeforeEditing = front }
         let editor = CaptureEditorController(item: item, image: image)
         editor.onStatus = { [weak self] text in self?.report(text) }
         editor.onSaved = { [weak self] in self?.keep(item); self?.showTray() }
         editor.onClose = { [weak self, weak editor] in
-            guard let editor else { return }
-            self?.editors.removeAll { $0 === editor }
+            guard let self, let editor else { return }
+            self.editors.removeAll { $0 === editor }
+            // Hand focus back before AppKit promotes the dashboard to key window.
+            if self.editors.isEmpty, let previous = self.appBeforeEditing, !previous.isTerminated { previous.activate(options: []) }
+            if self.editors.isEmpty { self.appBeforeEditing = nil }
         }
         editors.append(editor)
         editor.showWindow(nil); editor.window?.makeKeyAndOrderFront(nil)
@@ -447,7 +456,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         guard !captureInFlight,selectionWindows.isEmpty else{return}
         previewsHidden=false
         hiddenPinned.forEach{$0.orderFrontRegardless()};hiddenPinned=[]
-        let visible=(NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x:0,y:0,width:1000,height:800)
+        let pointerScreen=NSScreen.screens.first{NSMouseInRect(NSEvent.mouseLocation,$0.frame,false)}
+        let movedScreen=trayScreen != nil && pointerScreen != nil && pointerScreen != trayScreen
+        if let pointerScreen {trayScreen=pointerScreen}
+        let visible=(trayScreen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x:0,y:0,width:1000,height:800)
         let count=max(1,Int((visible.height-36)/140))
         let visibleItems=Array(trayItems.prefix(count))
         let ids=Set(visibleItems.map(\.id))
@@ -465,9 +477,25 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             host.menu=menu;panel.contentView=host
             let frame=CGRect(x:visible.minX+18,y:visible.minY+18+CGFloat(visibleItems.count-1-i)*140,width:200,height:128)
             // Slide existing previews into their new slot so a removed one reads as the stack tidying up.
-            if panel.isVisible && panel.frame != frame {NSAnimationContext.runAnimationGroup{context in context.duration=0.22;panel.animator().setFrame(frame,display:true)}}
+            if panel.isVisible && panel.frame != frame && !movedScreen {NSAnimationContext.runAnimationGroup{context in context.duration=0.22;panel.animator().setFrame(frame,display:true)}}
             else {panel.setFrame(frame,display:true)}
             panel.orderFrontRegardless();previewPanels[item.id]=panel
+        }
+        followPointerWithTray()
+    }
+
+    /// Move the thumbnail stack to whichever display the pointer is on, as CleanShot does.
+    /// Waits while a mouse button is down so a drag out of the stack is never interrupted.
+    private func followPointerWithTray() {
+        guard !previewPanels.isEmpty else {trayFollow?.invalidate();trayFollow=nil;return}
+        guard trayFollow == nil else{return}
+        trayFollow=Timer.scheduledTimer(withTimeInterval:0.25,repeats:true){[weak self] _ in
+            Task{@MainActor in
+                guard let self,!self.previewsHidden,NSEvent.pressedMouseButtons == 0,
+                      let screen=NSScreen.screens.first(where:{NSMouseInRect(NSEvent.mouseLocation,$0.frame,false)}),
+                      screen != self.trayScreen else{return}
+                self.showTray()
+            }
         }
     }
 
@@ -562,7 +590,7 @@ private struct CaptureTrayCard:View {
     var body:some View {
         ZStack(alignment:.bottom){
             // Like CleanShot: a click opens the editor, a drag drops the file into another app.
-            CaptureDragPreview(url:item.url,onClick:{coordinator.openEditor(item)},onOpen:{coordinator.openEditor(item)},onDropped:{coordinator.dismiss(item)},contextMenu:contextMenu)
+            CaptureDragPreview(url:item.url,onOpen:{coordinator.openEditor(item)},onDropped:{coordinator.dismiss(item)},contextMenu:contextMenu)
                 .frame(width:190,height:118).background(Color.black.opacity(0.2))
             if interaction.hovering {
                 Color.black.opacity(0.48).allowsHitTesting(false)

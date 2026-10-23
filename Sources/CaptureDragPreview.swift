@@ -31,7 +31,7 @@ final class CaptureDragImageView:NSView,NSDraggingSource {
     private var origin=CGPoint.zero
     private var dragging=false
     private var contextClick=false
-    override init(frame:NSRect) {super.init(frame:frame);setAccessibilityElement(true);setAccessibilityRole(.image);setAccessibilityLabel("Screenshot preview. Click to edit, or drag into another app.")}
+    override init(frame:NSRect) {super.init(frame:frame);setAccessibilityElement(true);setAccessibilityRole(.image);setAccessibilityLabel("Screenshot preview. Double-click to edit, or drag into another app.")}
     required init?(coder:NSCoder){fatalError()}
     override func draw(_ dirtyRect:NSRect) {
         guard let image else{return}

@@ -7,6 +7,8 @@ struct SpeechState: Decodable {
     var microphoneAccess: Int? = nil
     /// True while the speech model is still loading or downloading.
     var loading: Bool? = nil
+    /// True when the speech model could not be downloaded or loaded after the automatic retries.
+    var modelError: Bool? = nil
     var keyListenerReady: Bool? = nil
     var compute: String? = nil
     var fallback: Bool? = nil

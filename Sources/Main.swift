@@ -537,6 +537,11 @@ struct ContinuousView:View {
         }
         if model.voice.settings.dictationEnabled {
             heading("Dictation")
+            if model.voice.state.modelError == true {
+                let retry=NSMenuItem(title:"Speech Model Didn’t Download: Try Again",action:#selector(resetSpeech),keyEquivalent:"");retry.target=self;menu.addItem(retry)
+            } else if model.voice.state.loading == true {
+                let loading=NSMenuItem(title:model.voice.state.status,action:nil,keyEquivalent:"");loading.isEnabled=false;menu.addItem(loading)
+            }
             tool(model.voice.state.recording ? "Stop Dictation":"Start Dictation","voice",shortcut:"voice")
             let hint=NSMenuItem(title:"Hold Fn to dictate · double-tap ⇧ to paste the last one",action:nil,keyEquivalent:"");hint.isEnabled=false;menu.addItem(hint)
             let phrase=(model.voice.settings.wakePhrase ?? "").trimmingCharacters(in:.whitespaces)
