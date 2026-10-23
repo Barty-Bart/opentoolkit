@@ -54,7 +54,7 @@ struct ShortcutsView:View {
             HStack{VStack(alignment:.leading,spacing:2){Text("Paste last transcript");Text("Double-tap to paste into the text box. Triple-tap opens history.").font(.caption).foregroundStyle(.secondary)};Spacer()
                 Picker("Double-tap key",selection:Binding(get:{model.voice.settings.recoveryKey ?? "shift"},set:{model.voice.settings.recoveryKey=$0;model.voice.persist()})){Text("⇧ Shift ×2").tag("shift");Text("⌘ Command ×2").tag("command");Text("⌥ Option ×2").tag("option");Text("Off").tag("off")}.labelsHidden().frame(width:150);clearColumn}
             row("voice");row("recover")
-            HStack{VStack(alignment:.leading,spacing:2){Text("Hey Toolkit");Text("Say the wake phrase, wait for the cue, then a command.").font(.caption).foregroundStyle(.secondary)};Spacer();Button("Customize…"){model.page = .voice}.frame(width:150,alignment:.center);clearColumn}
+            HStack{VStack(alignment:.leading,spacing:2){Text("Hey Toolkit");Text("Say the wake phrase, wait for the cue, then a command.").font(.caption).foregroundStyle(.secondary)};Spacer();Button("Customize…"){model.settingsSection = .dictation;model.page = .settings}.frame(width:150,alignment:.center);clearColumn}
         }
         group("Notes",module:"organizer"){row("notes");row("reminders")}
     }}

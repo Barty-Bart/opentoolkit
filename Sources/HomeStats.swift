@@ -30,11 +30,22 @@ struct HomeSnapshot:Equatable {
 }
 
 enum HomeStatsQuery {
-    static let typingWordsPerMinute=40.0
+    static let defaultTypingWordsPerMinute=40.0
+    /// Typing-test score: correctly typed characters ÷ 5 per minute, and the share of keys that were right.
+    static func typingScore(sample:String,typed:String,seconds:Double)->(wpm:Int,accuracy:Int) {
+        guard seconds>0 else{return (0,0)}
+        let correct=zip(sample,typed).filter{$0==$1}.count
+        return (Int((Double(correct)/5/(seconds/60)).rounded()),typed.isEmpty ? 0:Int((Double(correct)/Double(typed.count)*100).rounded()))
+    }
+    /// The user's measured typing speed (Settings › Home summary › Measure…), else 40 wpm.
+    static var typingWordsPerMinute:Double {
+        let measured=UserDefaults.standard.double(forKey:"typingWordsPerMinute")
+        return (10...250).contains(measured) ? measured:defaultTypingWordsPerMinute
+    }
     /// Meeting and continuous-notes segments store their mode where the app name goes.
     static let segmentApps=["meeting","ambient","meeting system audio"]
     /// Practice runs in the Dictation tab are saved with OpenToolkit (formerly Pico) in front.
-    static let practiceApps=["OpenToolkit","Pico"]
+    static let practiceApps=["OpenToolkit","Pico","Mac Multi-Tool"]
     static let stopWords:Set<String>=["that","this","with","have","from","they","will","would","there","their","what","about","which","when","your","just","like","then","them","than","been","were","into","some","could","also","more","only","other","these","those","because","really","think","know","going","want","need","okay","yeah","actually","something","thing","things","make","sure","said","very","much","well","here","where","does","doesn't","don't","it's","that's","can't","should","maybe","right","kind","sort","even","still","back","over","after","before","being","through","again","while","each","every","same","most","many","such","look","good","let's","gonna","wanna","you're","i've","we're","there's","what's","didn't","isn't","get","got","getting","thank","thanks","please","hello"]
 
     static func load(db:LibraryDatabase,period:HomePeriod,now:Date=Date(),calendar:Calendar = .current)throws->HomeSnapshot {

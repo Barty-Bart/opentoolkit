@@ -16,6 +16,7 @@ enum ToolPage: String, CaseIterable, Identifiable {
     @Published var recoveryID = UUID()
     @Published var page:ToolPage = .home
     @Published var captureSection="Capture"
+    @Published var settingsSection:SettingsSection = .general
     @Published var notice="Everything stays on this Mac."
     @Published var fixedFrame=false
     @Published var frameWidth="1280"
@@ -69,7 +70,7 @@ enum ToolPage: String, CaseIterable, Identifiable {
         voice.settings.organizerEnabled=enabled("organizer");voice.settings.continuousEnabled=enabled("continuous");voice.persist()
         voice.onEvent={ [weak self] event in self?.receive(event) }
         capture.onStatus={ [weak self] text in self?.notice=text }
-        capture.onShowAllHistory={ [weak self] in self?.captureSection="History";self?.page = .capture;self?.showWindow?() }
+        capture.onShowAllHistory={ [weak self] in self?.page = .capture;self?.showWindow?() }
         capture.onDrawingActiveChanged={ [weak self] active in
             guard let self else{return}
             if active {drawingStartedAt=Date()}
@@ -251,37 +252,157 @@ struct ToolCard<Content:View>:View {
     let title:String;let subtitle:String;var accent:Color = .cyan;@ViewBuilder var content:()->Content
     var body:some View {VStack(alignment:.leading,spacing:14){Text(title).font(.system(size:14,weight:.semibold));if !subtitle.isEmpty {Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)};content()}.frame(maxWidth:.infinity,alignment:.leading).padding(18).background(.regularMaterial,in:RoundedRectangle(cornerRadius:18)).overlay{RoundedRectangle(cornerRadius:18).strokeBorder(.white.opacity(0.06),lineWidth:1)}}
 }
+/// Settings sections, shown as a list inside the Settings page (and later a Settings window).
+enum SettingsSection:String,CaseIterable,Identifiable {
+    case update="Software Update",general="General",shortcuts="Shortcuts",screenshots="Screenshots",recording="Recording",drawing="Draw on Screen",dictation="Dictation",permissions="Permissions",advanced="Advanced"
+    var id:String{rawValue}
+    var symbol:String {switch self {case .update:return "arrow.down.circle";case .general:return "gearshape";case .shortcuts:return "keyboard";case .screenshots:return "viewfinder";case .recording:return "record.circle";case .drawing:return "pencil.tip.crop.circle";case .dictation:return "waveform";case .permissions:return "hand.raised";case .advanced:return "wrench.and.screwdriver"}}
+    static let groups:[(String,[SettingsSection])]=[("",[.update,.general,.shortcuts]),("Tools",[.screenshots,.recording,.drawing,.dictation]),("System",[.permissions,.advanced])]
+}
+
 struct RootView:View {
     @ObservedObject var model:AppModel
-    var voiceTabs:some View {Picker("Voice section",selection:$model.page){Text("Settings").tag(ToolPage.voice);Text("History").tag(ToolPage.history);Text("Corrections").tag(ToolPage.corrections)}.pickerStyle(.segmented)}
-    var body:some View {HStack(spacing:0){VStack(alignment:.leading,spacing:6){HStack{Image(nsImage:NSApp.applicationIconImage).resizable().frame(width:32,height:32);VStack(alignment:.leading){Text("OpenToolkit").font(.headline);Text("YOUR LOCAL TOOLBOX").font(.system(size:9,weight:.semibold,design:.monospaced)).tracking(1.1).foregroundStyle(.secondary)}}.padding(.bottom,26)
-        ForEach(ToolPage.allCases.filter{$0 != .history && $0 != .corrections && $0 != .continuous && $0 != .recording}){p in Button{model.page=p} label:{HStack(spacing:11){Image(systemName:p.symbol).foregroundStyle(p.color).frame(width:22);Text(p.rawValue);Spacer(minLength:0);if p == .settings && model.updates.available != nil {Text("1").font(.system(size:11,weight:.bold)).foregroundStyle(.white).padding(.horizontal,7).padding(.vertical,2).background(Capsule().fill(Color.red)).help("An update is available")}}.padding(.horizontal,10).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).contentShape(Rectangle()).background(model.page==p ? .white.opacity(0.09):.clear,in:RoundedRectangle(cornerRadius:9))}.buttonStyle(.plain)}
-        Spacer();Text("OpenToolkit \(AppUpdates.version)").font(.system(size:10,design:.monospaced)).foregroundStyle(.secondary)
-    }.padding(18).frame(width:224).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:22)).overlay{RoundedRectangle(cornerRadius:22).strokeBorder(.white.opacity(0.12),lineWidth:1)}.padding(8);VStack(spacing:0){HStack{VStack(alignment:.leading,spacing:5){Text(model.page.rawValue).font(.system(size:22,weight:.semibold));Text(subtitle).font(.callout).foregroundStyle(.secondary)};Spacer();Image(systemName:model.page.symbol).font(.system(size:30,weight:.light)).foregroundStyle(model.page.color)}.padding(28)
-        ScrollView{content.padding(.horizontal,28).padding(.bottom,28)}.id(model.recoveryID);Divider();Text(model.notice).font(.caption).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading).padding(13)
-    }.background(Color.black.opacity(0.12))}.frame(minWidth:960,minHeight:700).preferredColorScheme(.dark).toggleStyle(.switch).tint(.blue)}
-    var subtitle:String {switch model.page {case .home:return "Your week at a glance, counted on this Mac.";case .voice:return "Your voice, transcribed on your Mac.";case .corrections:return "Words your way. Confirm, disable or remove a correction.";case .history:return "Copy a past transcription or tune your word corrections.";case .capture:return "Select, annotate, then drag it wherever you need it.";case .drawing:return "Draw directly over your screen.";case .recording:return "Record a region, with a frame you control.";case .organizer:return "A place for quick thoughts and timely nudges.";case .continuous:return "Visible, optional capture. Always under your control.";case .settings:return "Choose your shortcuts and the tools you want."}}
-    @ViewBuilder var content:some View {
+    /// Simplified sidebar: Home, Screenshots, Dictation, Notes (when on); Settings pinned at the bottom.
+    private var pages:[ToolPage] {
+        var list:[ToolPage]=[.home]
+        if model.enabled("screenshots") || model.enabled("recording") {list.append(.capture)}
+        if model.voice.settings.dictationEnabled {list.append(.voice)}
+        if model.enabled("organizer") {list.append(.organizer)}
+        return list
+    }
+    /// The sidebar row that owns the current page, so sub-pages keep their row highlighted.
+    private var current:ToolPage {
         switch model.page {
-        case .home: HomeDashboard(model:model)
-        case .voice: VStack(spacing:18){voiceTabs;VoiceView(voice:model.voice);DictationModesView(voice:model.voice);VoiceFeedbackSettings(voice:model.voice)}
-        case .corrections:VStack(spacing:18){voiceTabs;SpeechHistoryView(voice:model.voice,correctionsOnly:true)}
-        case .history:VStack(spacing:18){voiceTabs;SpeechHistoryView(voice:model.voice,saveAsNote:{text in model.organizer.addNote(text);model.notice="Saved a copy in Notes."})}
-        case .capture: VStack(spacing:18){Picker("Screenshot section",selection:$model.captureSection){Text("Capture").tag("Capture");Text("History").tag("History");Text("Settings").tag("Settings")}.pickerStyle(.segmented)
-            if model.captureSection=="History" {CaptureHistoryView(capture:model.capture)}
-            else if model.captureSection=="Settings" {ToolCard(title:"Screenshot settings",subtitle:"Choose how screenshots are captured and stored."){Toggle("Enable screenshots",isOn:binding("screenshots"));HStack{Text("Shortcuts");Spacer();Button("Change in Settings › Shortcuts…"){model.page = .settings}};CrosshairColorPicker();Toggle("Play a shutter sound when capturing",isOn:Binding(get:{CaptureSound.enabled},set:{UserDefaults.standard.set($0,forKey:"captureSound");if $0 {CaptureSound.play()}}));Button("Open capture options…"){model.showCaptureOptions()}};CaptureRetentionView(capture:model.capture)}
-            else {ToolCard(title:"Capture a screenshot",subtitle:"Your screenshot appears in the floating tray and History. Drag it into any app, keep it, or save it to a folder.",accent:.blue){HStack{Button("Select area  \(shortcutLabel(model.keys["screenshots"] ?? "S",model.modifiers("screenshots")))"){model.perform("screenshots")}.buttonStyle(.borderedProminent);Button("Capture options · video & GIF…"){model.showCaptureOptions()};Button("Recording settings"){model.page = .recording}}};CaptureShelf(capture:model.capture)}
+        case .voice,.history,.corrections:return .voice
+        case .recording:return .capture
+        case .drawing,.continuous:return .settings
+        default:return model.page
         }
-        case .drawing:AnnotationSettings(model:model)
-        case .recording:VStack(spacing:18){ToolCard(title:"Screen recording",subtitle:"Select a free region or lock the dimensions. System audio is included; microphone audio is optional.",accent:.red){Toggle("Enable recording",isOn:binding("recording"));Toggle("Include microphone",isOn:$model.includeMic);frameControls;RecordingControls(recording:model.recording,begin:{model.perform("recording")})};ToolCard(title:"Cursor in recordings",subtitle:"Make the pointer easy to follow in videos and GIFs.",accent:.red){CursorEffectsSettings()};Button("Open recordings folder"){NSWorkspace.shared.open(storageRoot.appendingPathComponent("Recordings"))}}
-        case .organizer:if model.enabled("organizer") {NotesLibraryView(model:model)}else{ToolCard(title:"Notes · experimental",subtitle:"Local notes and keyword search. AI summaries and model discovery are deferred."){Button("Enable Notes"){model.toggle("organizer",true)}}}
-        case .continuous:ContinuousView(voice:model.voice,organizer:model.organizer,meetingAudio:model.meetingAudio,systemAudio:$model.systemMeetingAudio,enabled:model.enabled("continuous"))
-        case .settings:VStack(spacing:18){if model.updates.available != nil {UpdateSettingsView(updates:model.updates)};ShortcutsView(model:model);if model.updates.available == nil {UpdateSettingsView(updates:model.updates)};Button("Setup & speech runtime…"){UserDefaults.standard.set(false,forKey:"setupComplete");model.hotkeys?.clear()};UsageSettings();ToolCard(title:"Tools",subtitle:"Turn off the tools you do not need."){ForEach(["screenshots","drawing","recording","organizer","continuous"],id:\.self){key in Toggle(["screenshots":"Screenshots","drawing":"Screen drawing","recording":"Screen recording","organizer":"Notes","continuous":"Meeting & daily notes"][key] ?? key,isOn:binding(key))}};PermissionsView(voice:model.voice);Button("Open local data folder"){NSWorkspace.shared.open(storageRoot)};Text("Email watching is deferred. No cloud accounts are connected.").font(.caption).foregroundStyle(.secondary)}
+    }
+    private func title(_ page:ToolPage)->String {page == .capture ? "Screenshots":page == .voice ? "Dictation":page.rawValue}
+    private func symbol(_ page:ToolPage)->String {page == .capture ? "photo.on.rectangle":page.symbol}
+    var body:some View {
+        HStack(spacing:0) {
+            VStack(spacing:0) {
+                List(selection:Binding(get:{current},set:{if let page=$0 {model.page = page == .voice ? .history:page}})) {
+                    ForEach(pages) {page in Label(title(page),systemImage:symbol(page)).tag(page)}
+                }
+                .listStyle(.sidebar).scrollContentBackground(.hidden)
+                Button{model.page = .settings} label:{
+                    HStack(spacing:8) {
+                        Image(systemName:"gearshape").foregroundStyle(.secondary).frame(width:20)
+                        Text("Settings");Spacer(minLength:0)
+                        if model.updates.available != nil {Text("1").font(.system(size:11,weight:.bold)).foregroundStyle(.white).padding(.horizontal,7).padding(.vertical,1).background(Capsule().fill(Color.red)).help("An update is available")}
+                    }
+                    .padding(.horizontal,10).frame(height:28).contentShape(Rectangle())
+                    .background(current == .settings ? Color.white.opacity(0.1):.clear,in:RoundedRectangle(cornerRadius:6))
+                }.buttonStyle(.plain).padding(.horizontal,10).padding(.bottom,12)
+            }
+            .frame(width:200)
+            Divider()
+            VStack(spacing:0) {
+                VStack(alignment:.leading,spacing:5) {
+                    Text(title(current)).font(.system(size:22,weight:.semibold))
+                    Text(subtitle).font(.callout).foregroundStyle(.secondary)
+                }.frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,28).padding(.top,18).padding(.bottom,16)
+                if current == .settings {settings} else {ScrollView{content.padding(.horizontal,28).padding(.bottom,28)}.id(model.recoveryID)}
+                Divider()
+                Text(model.notice).font(.caption).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading).padding(13)
+            }.background(Color.black.opacity(0.12))
+        }
+        .frame(minWidth:960,minHeight:700).preferredColorScheme(.dark).toggleStyle(.switch).tint(.blue)
+    }
+    var subtitle:String {
+        switch current {
+        case .home:return "Your week at a glance, counted on this Mac."
+        case .voice:return "Your transcriptions and the corrections OpenToolkit has learned."
+        case .capture:return "Your recent screenshots. Drag one into any app, keep it, or save it."
+        case .organizer:return "A place for quick thoughts and timely nudges."
+        default:return "Shortcuts, tools and permissions."
+        }
+    }
+    @ViewBuilder var content:some View {
+        switch current {
+        case .home:HomeDashboard(model:model)
+        case .voice:
+            VStack(spacing:18) {
+                Picker("Dictation section",selection:Binding(get:{model.page == .corrections ? ToolPage.corrections:ToolPage.history},set:{model.page=$0})) {
+                    Text("History").tag(ToolPage.history);Text("Corrections").tag(ToolPage.corrections)
+                }.pickerStyle(.segmented).labelsHidden().frame(width:280)
+                if model.page == .corrections {SpeechHistoryView(voice:model.voice,correctionsOnly:true)}
+                else {SpeechHistoryView(voice:model.voice,saveAsNote:{text in model.organizer.addNote(text);model.notice="Saved a copy in Notes."})}
+            }
+        case .capture:
+            VStack(alignment:.leading,spacing:18) {
+                HStack {
+                    Spacer()
+                    Button("Open recordings folder"){NSWorkspace.shared.open(storageRoot.appendingPathComponent("Recordings"))}
+                    Button("Screenshot settings…"){model.settingsSection = .screenshots;model.page = .settings}
+                }
+                CaptureHistoryView(capture:model.capture)
+            }
+        case .organizer:
+            if model.enabled("organizer") {NotesLibraryView(model:model)}
+            else {ToolCard(title:"Notes · experimental",subtitle:"Local notes and keyword search."){Button("Turn on Notes"){model.toggle("organizer",true)}}}
+        default:EmptyView()
+        }
+    }
+    /// Settings: a section list beside the selected section's controls.
+    var settings:some View {
+        HStack(spacing:0) {
+            List(selection:Binding(get:{model.settingsSection},set:{if let section=$0 {model.settingsSection=section}})) {
+                ForEach(SettingsSection.groups,id:\.0) {group in
+                    Section(group.0) {
+                        ForEach(group.1) {section in
+                            HStack {
+                                Label(section.rawValue,systemImage:section.symbol)
+                                Spacer(minLength:0)
+                                if section == .update && model.updates.available != nil {Circle().fill(Color.red).frame(width:8,height:8)}
+                            }.tag(section)
+                        }
+                    }
+                }
+            }.listStyle(.sidebar).scrollContentBackground(.hidden).frame(width:210)
+            Divider()
+            ScrollView{settingsDetail.padding(.horizontal,24).padding(.vertical,8).padding(.bottom,20)}
+        }
+    }
+    @ViewBuilder var settingsDetail:some View {
+        VStack(spacing:18) {
+            switch model.settingsSection {
+            case .update:UpdateSettingsView(updates:model.updates)
+            case .general:
+                ToolCard(title:"Tools",subtitle:"Turn off the tools you don't need."){
+                    Toggle("Dictation",isOn:Binding(get:{model.voice.settings.dictationEnabled},set:{model.voice.settings.dictationEnabled=$0;model.voice.persist()}))
+                    ForEach(["screenshots","recording","drawing","organizer","continuous"],id:\.self){key in Toggle(["screenshots":"Screenshots","drawing":"Draw on screen","recording":"Screen recording","organizer":"Notes","continuous":"Meeting & daily notes"][key] ?? key,isOn:binding(key))}
+                }
+                UsageSettings()
+            case .shortcuts:ShortcutsView(model:model)
+            case .screenshots:
+                ToolCard(title:"Screenshots",subtitle:"How capture looks and sounds."){
+                    CrosshairColorPicker()
+                    Toggle("Play a shutter sound when capturing",isOn:Binding(get:{CaptureSound.enabled},set:{UserDefaults.standard.set($0,forKey:"captureSound");if $0 {CaptureSound.play()}}))
+                    Button("Open the capture bar (⇧⌘5)"){model.showCaptureOptions()}
+                }
+                CaptureRetentionView(capture:model.capture)
+            case .recording:
+                ToolCard(title:"Screen recording",subtitle:"System audio is included; microphone audio is optional."){
+                    Toggle("Include microphone",isOn:$model.includeMic);frameControls
+                    RecordingControls(recording:model.recording,begin:{model.perform("recording")})
+                }
+                ToolCard(title:"Cursor in recordings",subtitle:"Make the pointer easy to follow in videos and GIFs."){CursorEffectsSettings()}
+            case .drawing:AnnotationSettings(model:model)
+            case .dictation:VoiceView(voice:model.voice);DictationModesView(voice:model.voice);VoiceFeedbackSettings(voice:model.voice)
+            case .permissions:PermissionsView(voice:model.voice)
+            case .advanced:
+                ToolCard(title:"Advanced",subtitle:"Your library, settings and recordings stay in this folder on your Mac."){
+                    Button("Open local data folder"){NSWorkspace.shared.open(storageRoot)}
+                    Text("No accounts, cloud transcription or sync are used.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
     }
     func binding(_ key:String)->Binding<Bool>{Binding(get:{model.enabled(key)},set:{model.toggle(key,$0)})}
-    func toolLink(_ page:ToolPage,_ detail:String)->some View {Button{model.page=page}label:{VStack(alignment:.leading,spacing:10){Image(systemName:page.symbol).font(.title2).foregroundStyle(page.color);Text(page.rawValue).font(.headline);Text(detail).font(.callout).foregroundStyle(.secondary)}.frame(maxWidth:.infinity,minHeight:110,alignment:.leading).padding(18).background(.thinMaterial,in:RoundedRectangle(cornerRadius:14)).contentShape(Rectangle())}.buttonStyle(.plain)}
-    func quick(_ title:String,_ symbol:String,_ action:String)->some View{Button{model.perform(action)}label:{HStack{Image(systemName:symbol).font(.title2).frame(width:35);Text(title);Spacer()}.padding(17).background(.white.opacity(0.05),in:RoundedRectangle(cornerRadius:10))}.buttonStyle(.plain)}
     var frameControls:some View {VStack(alignment:.leading){Toggle("Lock frame dimensions",isOn:$model.fixedFrame);if model.fixedFrame {HStack{TextField("Width",text:$model.frameWidth).frame(width:90);Text("×");TextField("Height",text:$model.frameHeight).frame(width:90);Text("screen points").foregroundStyle(.secondary)};HStack{Button("16:9 · 1280×720"){model.frameWidth="1280";model.frameHeight="720"};Button("Square · 720×720"){model.frameWidth="720";model.frameHeight="720"};Button("Vertical · 720×1280"){model.frameWidth="720";model.frameHeight="1280"}}.font(.caption)}}}
 }
 struct VoiceSummary:View {
@@ -472,10 +593,10 @@ struct ContinuousView:View {
     func show(){NSApp.activate(ignoringOtherApps:true);window.makeKeyAndOrderFront(nil)}
     @objc func showAction(){show()}
     @objc func screenshotHistory(){model.capture.showRecentHistory()}
-    @objc func updateAction(){model.page = .settings;show();model.updates.check()}
-    @objc func updateAvailableAction(){model.page = .settings;show()}
+    @objc func updateAction(){model.settingsSection = .update;model.page = .settings;show();model.updates.check()}
+    @objc func updateAvailableAction(){model.settingsSection = .update;model.page = .settings;show()}
     @objc func settingsAction(){model.page = .settings;show()}
-    @objc func voiceSettingsAction(){model.page = .voice;show()}
+    @objc func voiceSettingsAction(){model.settingsSection = .dictation;model.page = .settings;show()}
     @objc func toolAction(_ sender:NSMenuItem){
         guard let action=sender.representedObject as? String else{return}
         switch action {
@@ -484,7 +605,7 @@ struct ContinuousView:View {
         case "clearDrawing":model.capture.clearAnnotations()
         case "page:screenshotHistory":model.capture.showRecentHistory()
         case "page:dictationHistory":model.page = .history;show()
-        case "page:voice":model.page = .voice;show()
+        case "page:voice":model.settingsSection = .dictation;model.page = .settings;show()
         default:model.perform(action)
         }
     }
@@ -512,5 +633,17 @@ struct CrosshairColorPicker:View {
                 Button{name=option.name}label:{Circle().fill(Color(nsColor:option.color)).frame(width:20,height:20).overlay{Circle().strokeBorder(.white,lineWidth:name==option.name ? 2:0)}.padding(2)}.buttonStyle(.plain).help(option.name)
             }
         }
+    }
+}
+
+/// The app's ⌘ mark drawn natively at small sizes (a shrunken app icon keeps its margins and looks off).
+struct AppMark:View {
+    var size:CGFloat
+    var body:some View {
+        ZStack{
+            RoundedRectangle(cornerRadius:size*0.24,style:.continuous).fill(Color(red:0.11,green:0.11,blue:0.118))
+            RoundedRectangle(cornerRadius:size*0.24,style:.continuous).strokeBorder(.white.opacity(0.14),lineWidth:1)
+            Image(systemName:"command").font(.system(size:size*0.52,weight:.semibold)).foregroundStyle(.white)
+        }.frame(width:size,height:size).accessibilityHidden(true)
     }
 }

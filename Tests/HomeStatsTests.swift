@@ -81,6 +81,14 @@ import Foundation
         // An empty library is an empty summary, not an error.
         let empty=try HomeStatsQuery.load(db:try fresh("empty"),period:.week,now:now,calendar:calendar)
         check(empty.isEmpty && empty.busiest==nil && empty.apps.isEmpty && empty.topWords.isEmpty && empty.correctionsLearned==0,"Empty library")
+        // Typing test: 100 correct characters in 30 s = 20 words in half a minute = 40 wpm.
+        let sample=String(repeating:"abcde",count:20)
+        let perfect=HomeStatsQuery.typingScore(sample:sample,typed:sample,seconds:30)
+        check(perfect.wpm==40 && perfect.accuracy==100,"perfect typing scores 40 wpm, 100%")
+        let typos=HomeStatsQuery.typingScore(sample:sample,typed:String(repeating:"abcdX",count:20),seconds:30)
+        check(typos.wpm==32 && typos.accuracy==80,"typos lower both speed and accuracy")
+        check(HomeStatsQuery.typingScore(sample:sample,typed:"",seconds:0)==(0,0),"no time, no score")
+        check(HomeStatsQuery.typingWordsPerMinute==HomeStatsQuery.defaultTypingWordsPerMinute || UserDefaults.standard.double(forKey:"typingWordsPerMinute")>0,"falls back to 40 wpm until measured")
         print("Home stats: \(count) checks passed using disposable synthetic data.")
     }
 }

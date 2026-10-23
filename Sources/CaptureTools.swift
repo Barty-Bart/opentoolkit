@@ -46,6 +46,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var previewPanels:[UUID:NSPanel]=[:]
     private var recentPanel:NSPanel?
     private var selectionMonitors:[Any]=[]
+    private var selectionPoll:Timer?
     private var hiddenPinned:[NSPanel]=[]
     private var previewsHidden=false
     private var pinnedPreviews:[NSPanel]=[]
@@ -136,6 +137,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
         if let global = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { _ in Task { @MainActor in follow() } }) { selectionMonitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { event in follow(); return event }) { selectionMonitors.append(local) }
+        // Backstop: poll the pointer so the crosshair always follows, even if no event reaches us.
+        var last = NSEvent.mouseLocation
+        selectionPoll = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { _ in
+            Task { @MainActor in let p = NSEvent.mouseLocation; if p != last { last = p; follow() } }
+        }
     }
 
     private func finishSelection(_ rect: CGRect) {
@@ -216,6 +222,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     private func closeSelection() {
         selectionMonitors.forEach { NSEvent.removeMonitor($0) }; selectionMonitors = []
+        selectionPoll?.invalidate(); selectionPoll = nil
         if !selectionWindows.isEmpty { NSCursor.pop() }
         for window in selectionWindows { window.orderOut(nil); window.close() }
         selectionWindows.removeAll()
@@ -456,7 +463,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             // or action controls. SwiftUI contextMenu can get stuck on a panel
             // that deliberately never activates the app.
             host.menu=menu;panel.contentView=host
-            panel.setFrame(CGRect(x:visible.minX+18,y:visible.minY+18+CGFloat(visibleItems.count-1-i)*140,width:200,height:128),display:true)
+            let frame=CGRect(x:visible.minX+18,y:visible.minY+18+CGFloat(visibleItems.count-1-i)*140,width:200,height:128)
+            // Slide existing previews into their new slot so a removed one reads as the stack tidying up.
+            if panel.isVisible && panel.frame != frame {NSAnimationContext.runAnimationGroup{context in context.duration=0.22;panel.animator().setFrame(frame,display:true)}}
+            else {panel.setFrame(frame,display:true)}
             panel.orderFrontRegardless();previewPanels[item.id]=panel
         }
     }
@@ -645,8 +655,16 @@ fileprivate final class RegionSelectionView: NSView {
     var onCancel: (() -> Void)?
     private let crosshairColor = CaptureCrosshair.color
     override var acceptsFirstResponder: Bool { true }
+    private var tracking: NSTrackingArea?
     init(frame: CGRect, state: SelectionState) { self.state = state; super.init(frame: frame); state.views.append(self) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    // Without this, a display's overlay never hears the pointer arrive while another app is active.
+    override func updateTrackingAreas() {
+        if let tracking { removeTrackingArea(tracking) }
+        tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking!); super.updateTrackingAreas()
+    }
+    override func mouseEntered(with event: NSEvent) { state.moved(to: NSEvent.mouseLocation); window?.makeKey() }
     /// This display's frame in global coordinates; drawing converts global points into it.
     private var screenFrame: CGRect { window?.frame ?? .zero }
     private func local(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x - screenFrame.minX, y: p.y - screenFrame.minY) }

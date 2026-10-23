@@ -17,13 +17,11 @@ struct AnnotationSettings: View {
                 }
                 AnnotationColorRow()
             }
-            ToolCard(title:"Tool shortcuts while drawing",subtitle:"These work only while drawing is on, so keys like ⌃A and ⌃E keep working in your other apps. Undo, Clear and colours take one press.",accent:.orange) {
-                DrawingToolShortcutRows(model:model)
-            }
+            Text("Tool keys used while drawing are in Settings › Shortcuts.").font(.caption).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)
         }
     }
 }
-/// Shared by the Drawing page and Settings › Shortcuts.
+/// Tool keys while drawing (Settings › Shortcuts).
 struct DrawingToolShortcutRows:View {
     @ObservedObject var model:AppModel
     @State private var issue=""
