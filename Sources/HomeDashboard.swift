@@ -7,8 +7,36 @@ struct HomeDashboard: View {
     @StateObject private var stats = HomeStats()
     @AppStorage(UsageLog.enabledKey) private var enabled = true
     @State private var measuring = false
+    @State private var cloudWord: String?
     private let refresh = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    /// Bigger words are said more. Click one to see the words you say near it.
+    @ViewBuilder private func wordCloud(_ words: [HomeSnapshot.CloudWord]) -> some View {
+        let most = Double(words.map(\.count).max() ?? 1)
+        // Alphabetical order mixes large and small words, as a cloud should.
+        FlowRow(words.sorted { $0.word.lowercased() < $1.word.lowercased() }) { item in
+            let weight = (Double(item.count) / most).squareRoot()
+            let selected = cloudWord == item.word
+            Button { cloudWord = selected ? nil : item.word } label: {
+                Text(item.word).font(.system(size: 11 + 13 * weight, weight: weight > 0.6 ? .semibold : .medium))
+                    .foregroundStyle(selected ? Color.accentColor : Color.primary.opacity(0.5 + 0.5 * weight))
+            }.buttonStyle(.plain).help("Said \(item.count.formatted()) times · click for words you say near it")
+        }
+        if let word = cloudWord, let item = words.first(where: { $0.word == word }) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(item.related.isEmpty ? "Nothing said near “\(word)” yet." : "Said near “\(word)”").font(.caption).foregroundStyle(.secondary)
+                if !item.related.isEmpty {
+                    FlowRow(item.related) { near in
+                        let inCloud = words.contains { $0.word == near }
+                        Button { if inCloud { cloudWord = near } } label: {
+                            Text(near).font(.caption.weight(.medium)).padding(.horizontal, 8).padding(.vertical, 4).background(.white.opacity(0.08), in: Capsule())
+                        }.buttonStyle(.plain).disabled(!inCloud)
+                    }
+                }
+            }.padding(.top, 4)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -72,12 +100,8 @@ struct HomeDashboard: View {
         }.fixedSize(horizontal: false, vertical: true)
         HStack(alignment: .top, spacing: 12) {
             ToolCard(title: "Words you say most", subtitle: "") {
-                if s.topWords.isEmpty { Text("Not enough dictation yet.").foregroundStyle(.secondary) }
-                else {
-                    FlowRow(Array(s.topWords.prefix(8))) { word in
-                        Text(word).font(.caption.weight(.medium)).padding(.horizontal, 8).padding(.vertical, 4).background(.white.opacity(0.08), in: Capsule())
-                    }
-                }
+                if s.wordCloud.isEmpty { Text("Not enough dictation yet.").foregroundStyle(.secondary) }
+                else { wordCloud(s.wordCloud) }
             }
             ToolCard(title: "Dictation habits", subtitle: "") {
                 fact("Dictations", s.dictations.formatted())
@@ -170,10 +194,17 @@ private struct FlowLayout: Layout {
         return CGSize(width: width, height: y + row)
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX, y = bounds.minY, row: CGFloat = 0
+        // Rows are filled first, then each item is centred vertically in its row (mixed sizes in the word cloud).
+        var rows: [[(LayoutSubview, CGSize)]] = [[]], x = bounds.minX
         for view in subviews { let size = view.sizeThatFits(.unspecified)
-            if x + size.width > bounds.maxX, x > bounds.minX { x = bounds.minX; y += row + spacing; row = 0 }
-            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size)); x += size.width + spacing; row = max(row, size.height) }
+            if x + size.width > bounds.maxX, x > bounds.minX { rows.append([]); x = bounds.minX }
+            rows[rows.count - 1].append((view, size)); x += size.width + spacing }
+        var y = bounds.minY
+        for row in rows {
+            let height = row.map(\.1.height).max() ?? 0; x = bounds.minX
+            for (view, size) in row { view.place(at: CGPoint(x: x, y: y + (height - size.height) / 2), proposal: ProposedViewSize(size)); x += size.width + spacing }
+            y += height + spacing
+        }
     }
 }
 

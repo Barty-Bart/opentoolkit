@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 import SwiftUI
 
 enum HomePeriod:String,CaseIterable,Identifiable {
@@ -24,6 +25,9 @@ struct HomeSnapshot:Equatable {
     var busiest:Busiest?
     var apps:[AppWords]=[]
     var topWords:[String]=[]
+    /// The word cloud: the period's most-said nouns, each with the words said most often near it.
+    struct CloudWord:Hashable,Identifiable {let word:String;let count:Int;let related:[String];var id:String{word}}
+    var wordCloud:[CloudWord]=[]
     /// Typing at a fixed 40 words a minute, less the time spent speaking.
     var typingMinutesSaved:Int {max(0,Int((Double(words)/HomeStatsQuery.typingWordsPerMinute-speakingSeconds/60).rounded()))}
     var isEmpty:Bool {dictations==0 && screenshots==0 && recordings==0 && gifs==0 && drawingSessions==0}
@@ -64,21 +68,25 @@ enum HomeStatsQuery {
         func mark(_ date:Date){s.heatmap[weekday(date)][calendar.component(.hour,from:date)]+=1}
 
         let display=correctionSpellings(db)
-        var counts:[String:Int]=[:],perApp:[String:Int]=[:],timedWords=0,timedSeconds=0.0
+        var counts:[String:Int]=[:],sequences:[[String]]=[],perApp:[String:Int]=[:],timedWords=0,timedSeconds=0.0
         for row in try dictations(current) {
             let n=wordCount(row[1]),seconds=Double(row[3]) ?? 0
             s.words+=n;s.dictations+=1;s.speakingSeconds+=seconds;s.longestSeconds=max(s.longestSeconds,seconds)
             if seconds>3 {timedWords+=n;timedSeconds+=seconds}
             perApp[row[2].isEmpty ? "Unknown":row[2],default:0]+=n
             if let date=local.date(from:row[0]) {mark(date)}
-            for word in tokens(row[1]) {counts[word,default:0]+=1}
+            let words=contentTokens(row[1]);sequences.append(words)
+            for word in words {counts[word,default:0]+=1}
         }
         s.previousWords=try dictations(previous).reduce(0){$0+wordCount($1[1])}
         if timedSeconds>0 {s.wordsPerMinute=Int((Double(timedWords)/(timedSeconds/60)).rounded())}
         let ranked=perApp.sorted{$0.value != $1.value ? $0.value>$1.value:$0.key<$1.key}
         s.apps=ranked.prefix(5).map{HomeSnapshot.AppWords(name:$0.key,words:$0.value)}
         let rest=ranked.dropFirst(5).reduce(0){$0+$1.value};if rest>0 {s.apps.append(.init(name:"Other",words:rest))}
-        s.topWords=counts.sorted{$0.value != $1.value ? $0.value>$1.value:$0.key<$1.key}.prefix(8).map{display[$0.key] ?? $0.key}
+        let top=counts.sorted{$0.value != $1.value ? $0.value>$1.value:$0.key<$1.key}.prefix(cloudSize)
+        let related=neighbours(of:Set(top.map(\.key)),in:sequences)
+        s.wordCloud=top.map{HomeSnapshot.CloudWord(word:display[$0.key] ?? $0.key,count:$0.value,related:(related[$0.key] ?? []).map{display[$0] ?? $0})}
+        s.topWords=s.wordCloud.prefix(8).map(\.word)
 
         let screenshotKinds:Set<String>=["capture_area","capture_full","capture_scroll"]
         for row in try db.rows("SELECT at,kind,COALESCE(seconds,0) FROM usage_events WHERE at>=? AND at<?",[String(current.start.timeIntervalSince1970),String(current.end.timeIntervalSince1970)]) {
@@ -100,6 +108,32 @@ enum HomeStatsQuery {
         for d in 0..<7 {for h in 0..<24 where s.heatmap[d][h]>best {best=s.heatmap[d][h];s.busiest = .init(weekday:d,hour:h)}}
         s.correctionsLearned=correctionsCreated(db,in:current)
         return s
+    }
+    static let cloudSize=20
+    /// Nouns only, found by the Mac's on-device language tagger, so filler such as "little",
+    /// "whatever" or "doing" doesn't crowd out what you actually talk about.
+    static func contentTokens(_ text:String)->[String] {
+        let tagger=NLTagger(tagSchemes:[.lexicalClass]);tagger.string=text
+        var nouns=Set<String>()
+        tagger.enumerateTags(in:text.startIndex..<text.endIndex,unit:.word,scheme:.lexicalClass,options:[.omitPunctuation,.omitWhitespace]){tag,range in
+            if tag == .noun {nouns.insert(text[range].lowercased().replacingOccurrences(of:"’",with:"'"))}
+            return true
+        }
+        return tokens(text).filter{nouns.contains($0)}
+    }
+    /// For each word, the other nouns said within a few words of it most often (at least twice when there's enough data).
+    static func neighbours(of words:Set<String>,in sequences:[[String]],window:Int=5,limit:Int=5)->[String:[String]] {
+        var pairs:[String:[String:Int]]=[:]
+        for sequence in sequences {
+            for (i,word) in sequence.enumerated() where words.contains(word) {
+                for j in max(0,i-window)...min(sequence.count-1,i+window) where j != i && sequence[j] != word {pairs[word,default:[:]][sequence[j],default:0]+=1}
+            }
+        }
+        return pairs.mapValues{near in
+            let ranked=near.sorted{$0.value != $1.value ? $0.value>$1.value:$0.key<$1.key}
+            let repeated=ranked.filter{$0.value>=2}
+            return (repeated.isEmpty ? ranked:repeated).prefix(limit).map(\.key)
+        }
     }
     static func wordCount(_ text:String)->Int {text.split{$0.isWhitespace}.count}
     static func tokens(_ text:String)->[String] {
