@@ -35,6 +35,8 @@ enum ToolPage: String, CaseIterable, Identifiable {
     let recording:RecordingCoordinator
     let organizer:OrganizerStore
     let meetingAudio:MeetingAudioCapture
+    let usage:UsageLog
+    private var drawingStartedAt:Date?
     @Published var systemMeetingAudio=true
     private var captureOptionsWindow:NSPanel?
     // Identifies the GIF recording in flight; a failed start must not convert or stop a later recording.
@@ -56,6 +58,7 @@ enum ToolPage: String, CaseIterable, Identifiable {
         recording=RecordingCoordinator(storage:storageRoot.appendingPathComponent("Recordings"))
         organizer=OrganizerStore(storage:storageRoot.appendingPathComponent("Organizer"),libraryURL:LibraryDatabase.url)
         meetingAudio=MeetingAudioCapture(storage:storageRoot.appendingPathComponent("MeetingAudio"))
+        usage=UsageLog();UsageLog.shared=usage
         if !UserDefaults.standard.bool(forKey:"captureShortcutsV2") {
             keys["screenshots"]="4";keys["fullScreenshot"]="3";keys["captureOptions"]="5"
             for name in ["screenshots","fullScreenshot","captureOptions"] {keyModifiers[name]=Int(cmdKey|shiftKey)}
@@ -67,7 +70,12 @@ enum ToolPage: String, CaseIterable, Identifiable {
         voice.onEvent={ [weak self] event in self?.receive(event) }
         capture.onStatus={ [weak self] text in self?.notice=text }
         capture.onShowAllHistory={ [weak self] in self?.captureSection="History";self?.page = .capture;self?.showWindow?() }
-        capture.onDrawingActiveChanged={ [weak self] _ in self?.registerDrawingTools() }
+        capture.onDrawingActiveChanged={ [weak self] active in
+            guard let self else{return}
+            if active {drawingStartedAt=Date()}
+            else if let start=drawingStartedAt {drawingStartedAt=nil;usage.record("draw_session",seconds:Date().timeIntervalSince(start),at:start)}
+            registerDrawingTools()
+        }
         // The sidebar bubble and Settings order follow update availability.
         updateObserver=updates.objectWillChange.sink{ [weak self] _ in self?.objectWillChange.send() }
         updates.busyReason={ [weak self] in
@@ -78,8 +86,8 @@ enum ToolPage: String, CaseIterable, Identifiable {
             return nil
         }
         recording.onSaved={ [weak self] url in
-            guard let self else{return};do {try LibraryDatabase().put(id:"media:"+url.lastPathComponent,kind:"video",title:url.lastPathComponent,body:"Screen recording",path:url.path)}catch{self.notice=error.localizedDescription};guard self.gifRecording != nil else{return};self.gifRecording=nil;self.notice="Converting recording to GIF…"
-            Task {do {let result=try await Task.detached(priority:.utility){try GIFExport.convert(url)}.value;self.notice="GIF ready: \(result.lastPathComponent)";self.capture.importCapture(result)}catch{self.notice="GIF conversion failed. The MP4 is preserved: \(error.localizedDescription)"}}
+            guard let self else{return};do {try LibraryDatabase().put(id:"media:"+url.lastPathComponent,kind:"video",title:url.lastPathComponent,body:"Screen recording",path:url.path)}catch{self.notice=error.localizedDescription};guard self.gifRecording != nil else{self.usage.recordVideo(url);return};self.gifRecording=nil;self.notice="Converting recording to GIF…"
+            Task {do {let result=try await Task.detached(priority:.utility){try GIFExport.convert(url)}.value;self.notice="GIF ready: \(result.lastPathComponent)";self.usage.record("record_gif");self.capture.importCapture(result)}catch{self.notice="GIF conversion failed. The MP4 is preserved: \(error.localizedDescription)"}}
         }
         recording.onStatus={ [weak self] text in self?.notice=text }
         meetingAudio.onStatus={ [weak self] text in self?.notice=text }
@@ -163,7 +171,7 @@ enum ToolPage: String, CaseIterable, Identifiable {
             capture.cancel();recording.selectRegion(fixedSize:size){[weak self] region in
                 guard let self,let region else{return}
                 let session=ScrollingCapture(region:region,storage:storageRoot.appendingPathComponent("ScrollCapture"))
-                session.onSaved={ [weak self] url in self?.capture.importCapture(url) }
+                session.onSaved={ [weak self] url in self?.usage.record("capture_scroll");self?.capture.importCapture(url) }
                 session.onStatus={ [weak self] text in self?.notice=text }
                 self.scrollCapture=session;session.show()
             }
@@ -188,7 +196,7 @@ enum ToolPage: String, CaseIterable, Identifiable {
             if e.success==true && (e.empty==true || savedAudioChunks.remove(path) != nil) {meetingAudio.acknowledge(URL(fileURLWithPath:path))}
             else {meetingAudio.stop();notice="System audio transcription paused. Unprocessed audio is retained locally."}
         }
-        if e.kind=="action" {let mapping=["recover":"recover","screenshot":"screenshots","annotate":"drawing","record":"recording"];if e.action=="record_stop" {recording.stop()}else if let action=mapping[e.action ?? ""] {perform(action)}}
+        if e.kind=="action" {usage.record("wake_command",trigger:"voice");let mapping=["recover":"recover","screenshot":"screenshots","annotate":"drawing","record":"recording"];if e.action=="record_stop" {recording.stop()}else if let action=mapping[e.action ?? ""] {perform(action)}}
         if e.kind=="transcript",let text=e.text {
             if e.mode=="note",enabled("organizer"){organizer.addNote(text,title:nil);notice="Voice note saved"}
             if e.mode=="reminder",enabled("organizer"){if organizer.parseReminder(text){notice="Reminder scheduled"}else{organizer.addNote(text,title:"Reminder to schedule");notice="Saved the reminder text. Choose a time in Notes & reminders."}}

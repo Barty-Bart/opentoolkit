@@ -52,6 +52,12 @@ class LibraryTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(write,range(20)))
         self.assertEqual(self.db.execute('SELECT count(*) FROM dictations').fetchone()[0],20)
         self.assertEqual(len(self.search('Concurrent')),20)
+    def test_usage_log_schema_is_additive(self):
+        self.add();again=connect(self.path);again.close()
+        cols=[r[1] for r in self.db.execute('PRAGMA table_info(usage_events)')]
+        self.assertEqual(cols,['id','at','kind','trigger','seconds'])
+        self.assertEqual(self.db.execute("SELECT value FROM library_meta WHERE key='schema_version'").fetchone()[0],'2')
+        self.add('Second dictation',id=2);self.assertEqual(self.db.execute('SELECT count(*) FROM dictations').fetchone()[0],2)
     def test_private_db(self):self.assertEqual(self.path.stat().st_mode&0o777,0o600)
     def test_unicode_and_quote(self):
         self.add('Zażółć gęślą jaźń. O\'Brien 🐙');self.assertTrue(self.search('"Zażółć"'));self.assertTrue(self.search('"Brien"'))

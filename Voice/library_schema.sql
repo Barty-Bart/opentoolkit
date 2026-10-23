@@ -15,3 +15,8 @@ CREATE TRIGGER IF NOT EXISTS dictation_insert AFTER INSERT ON dictations BEGIN I
 CREATE TRIGGER IF NOT EXISTS dictation_update AFTER UPDATE OF text ON dictations BEGIN UPDATE items SET body=new.text,updated=unixepoch() WHERE id='dictation:'||new.id; END;
 CREATE TRIGGER IF NOT EXISTS dictation_delete AFTER DELETE ON dictations BEGIN DELETE FROM items WHERE id='dictation:'||old.id; END;
 INSERT OR IGNORE INTO library_meta VALUES('schema_version','1');
+CREATE TABLE IF NOT EXISTS usage_events(id INTEGER PRIMARY KEY,at REAL NOT NULL,kind TEXT NOT NULL,trigger TEXT,seconds REAL);
+CREATE INDEX IF NOT EXISTS usage_events_at ON usage_events(at);
+CREATE INDEX IF NOT EXISTS usage_events_kind_at ON usage_events(kind,at);
+CREATE INDEX IF NOT EXISTS dictations_created ON dictations(created_at);
+UPDATE library_meta SET value='2' WHERE key='schema_version' AND CAST(value AS INTEGER)<2;

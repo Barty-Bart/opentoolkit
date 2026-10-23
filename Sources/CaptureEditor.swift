@@ -229,13 +229,14 @@ final class CaptureEditorController: NSWindowController, NSWindowDelegate, NSToo
         guard let window else{return}
         panel.beginSheetModal(for:window){[weak self] response in
             guard let self,response == .OK,let target=panel.url else{return}
-            do {try self.surface.renderedPNG().write(to:target,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:target.path);self.onSaved?();self.report("Annotated screenshot exported")}
+            do {try self.surface.renderedPNG().write(to:target,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:target.path);self.onSaved?();UsageLog.shared?.record("editor_export");self.report("Annotated screenshot exported")}
             catch {self.report("Export failed: \(error.localizedDescription)")}
         }
     }
     @objc private func copyImage() {
         do {let data=try surface.renderedPNG();NSPasteboard.general.clearContents();NSPasteboard.general.setData(data,forType:.png)
             if let image=NSImage(data:data),let tiff=image.tiffRepresentation{NSPasteboard.general.setData(tiff,forType:.tiff)}
+            UsageLog.shared?.record("editor_export")
             report("Edited screenshot copied")
         } catch {report("Copy failed: \(error.localizedDescription)")}
     }

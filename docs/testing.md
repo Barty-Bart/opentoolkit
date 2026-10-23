@@ -45,6 +45,8 @@ After installing speech dependencies into a test virtual environment:
 python -m unittest discover -s Tests -p 'test_*.py'
 bash Tests/run-recording-tests.sh
 bash Tests/run-meeting-audio-tests.sh
+bash Tests/run-usage-log-tests.sh
+bash Tests/run-home-stats-tests.sh
 ```
 
 The native library/organizer harnesses compile with `Sources/LibraryDatabase.swift` and `Sources/OrganizerTools.swift`; each corresponding `Tests/*Tests.swift` is its own executable. The recommendation harness uses only `Sources/SpeechRecommendation.swift`.

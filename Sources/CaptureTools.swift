@@ -52,6 +52,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var editors: [CaptureEditorController] = []
     var hasOpenEditor: Bool { editors.contains { $0.window?.isVisible == true } }
     private var captureInFlight = false
+    /// Usage-log kind of the capture in flight; full screen and area share the capture path.
+    private var captureKind = "capture_area"
     private var captureProcess: Process?
     private var captureFailure: String?
     private var selectionGeneration = 0
@@ -85,7 +87,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         guard !captureInFlight else{return}
         guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {report("Enable Screen Recording permission for OpenToolkit.");return}
         guard let screen=NSScreen.screens.first(where:{NSMouseInRect(NSEvent.mouseLocation,$0.frame,false)}) ?? NSScreen.main else{return}
-        cancel();finishSelection(screen.frame)
+        cancel();captureKind="capture_full";finishSelection(screen.frame)
     }
     func importCapture(_ source:URL){
         do {
@@ -104,6 +106,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             return
         }
         cancel()
+        captureKind = "capture_area"
         hideCapturePreviews()
         selectionGeneration += 1
         let generation = selectionGeneration
@@ -172,6 +175,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                         self.trayItems.insert(item, at: 0)
                         self.saveTrayState()
                         CaptureSound.play()
+                        UsageLog.shared?.record(self.captureKind)
                         self.showTray()
                         self.report("Screenshot ready · drag the thumbnail into an app, or click to edit")
                     } else {
@@ -333,6 +337,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         guard let image = NSImage(contentsOf: item.url) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([image])
+        UsageLog.shared?.record("editor_export")
         report("Screenshot copied")
     }
 
@@ -373,6 +378,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                 _ = self.index.keep(name:item.url.lastPathComponent,exported:target.path)
                 self.objectWillChange.send()
                 self.dismiss(item)
+                UsageLog.shared?.record("editor_export")
                 self.report("Screenshot saved")
             } catch { self.report("Save failed: \(error.localizedDescription)") }
         }
