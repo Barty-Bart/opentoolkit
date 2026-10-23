@@ -64,6 +64,7 @@ enum ToolPage: String, CaseIterable, Identifiable {
         voice.settings.organizerEnabled=enabled("organizer");voice.settings.continuousEnabled=enabled("continuous");voice.persist()
         voice.onEvent={ [weak self] event in self?.receive(event) }
         capture.onStatus={ [weak self] text in self?.notice=text }
+        capture.onShowAllHistory={ [weak self] in self?.captureSection="History";self?.page = .capture;self?.showWindow?() }
         capture.onDrawingActiveChanged={ [weak self] _ in self?.registerDrawingTools() }
         updates.busyReason={ [weak self] in
             guard let self else{return nil}
@@ -139,10 +140,15 @@ enum ToolPage: String, CaseIterable, Identifiable {
     }
     func showCaptureOptions(){
         captureOptionsWindow?.close()
-        let panel=NSPanel(contentRect:NSRect(x:0,y:0,width:644,height:300),styleMask:[.titled,.closable,.utilityWindow],backing:.buffered,defer:false)
-        panel.title="Capture options";panel.appearance=NSAppearance(named:.darkAqua);panel.isReleasedWhenClosed=false;panel.level = .floating
-        panel.contentView=NSHostingView(rootView:CaptureOptionsView(model:self,close:{panel.close()}))
-        panel.center();captureOptionsWindow=panel;NSApp.activate(ignoringOtherApps:true);panel.makeKeyAndOrderFront(nil)
+        var close:()->Void={}
+        let host=NSHostingView(rootView:CaptureOptionsView(model:self,close:{close()}))
+        let panel=CaptureBarPanel(content:host)
+        close={[weak panel] in panel?.close()};panel.onCancel=close
+        // Size to the bar and sit near the bottom centre of the screen with the pointer.
+        let screen=NSScreen.screens.first{NSMouseInRect(NSEvent.mouseLocation,$0.frame,false)} ?? NSScreen.main
+        let fitting=host.fittingSize,visible=screen?.visibleFrame ?? .zero
+        panel.setFrame(NSRect(x:visible.midX-fitting.width/2,y:visible.minY+90,width:fitting.width,height:fitting.height),display:true)
+        captureOptionsWindow=panel;panel.makeKeyAndOrderFront(nil)
     }
     func startCaptureMode(_ mode:String){
         if mode != "full" && fixedFrame && size==nil {notice="Enter valid frame dimensions.";return}
@@ -251,7 +257,7 @@ struct RootView:View {
         case .history:VStack(spacing:18){voiceTabs;SpeechHistoryView(voice:model.voice,saveAsNote:{text in model.organizer.addNote(text);model.notice="Saved a copy in Notes."})}
         case .capture: VStack(spacing:18){Picker("Screenshot section",selection:$model.captureSection){Text("Capture").tag("Capture");Text("History").tag("History");Text("Settings").tag("Settings")}.pickerStyle(.segmented)
             if model.captureSection=="History" {CaptureHistoryView(capture:model.capture)}
-            else if model.captureSection=="Settings" {ToolCard(title:"Screenshot settings",subtitle:"Choose how screenshots are captured and stored."){Toggle("Enable screenshots",isOn:binding("screenshots"));HStack{Text("Shortcuts");Spacer();Button("Change in Settings › Shortcuts…"){model.page = .settings}};Button("Open capture options…"){model.showCaptureOptions()}};CaptureRetentionView(capture:model.capture)}
+            else if model.captureSection=="Settings" {ToolCard(title:"Screenshot settings",subtitle:"Choose how screenshots are captured and stored."){Toggle("Enable screenshots",isOn:binding("screenshots"));HStack{Text("Shortcuts");Spacer();Button("Change in Settings › Shortcuts…"){model.page = .settings}};CrosshairColorPicker();Toggle("Play a shutter sound when capturing",isOn:Binding(get:{CaptureSound.enabled},set:{UserDefaults.standard.set($0,forKey:"captureSound");if $0 {CaptureSound.play()}}));Button("Open capture options…"){model.showCaptureOptions()}};CaptureRetentionView(capture:model.capture)}
             else {ToolCard(title:"Capture a screenshot",subtitle:"Your screenshot appears in the floating tray and History. Drag it into any app, keep it, or save it to a folder.",accent:.blue){HStack{Button("Select area  \(shortcutLabel(model.keys["screenshots"] ?? "S",model.modifiers("screenshots")))"){model.perform("screenshots")}.buttonStyle(.borderedProminent);Button("Capture options · video & GIF…"){model.showCaptureOptions()};Button("Recording settings"){model.page = .recording}}};CaptureShelf(capture:model.capture)}
         }
         case .drawing:AnnotationSettings(model:model)
@@ -433,7 +439,7 @@ struct ContinuousView:View {
         case "mode:scroll":model.startCaptureMode("scroll")
         case "mode:gif":model.startCaptureMode("gif")
         case "clearDrawing":model.capture.clearAnnotations()
-        case "page:screenshotHistory":model.captureSection="History";model.page = .capture;show()
+        case "page:screenshotHistory":model.capture.showRecentHistory()
         case "page:dictationHistory":model.page = .history;show()
         default:model.perform(action)
         }
@@ -452,4 +458,15 @@ struct ContinuousView:View {
 }
 @main struct OpenToolkitMain {
     @MainActor static func main(){let app=NSApplication.shared;let delegate=AppDelegate();app.delegate=delegate;withExtendedLifetime(delegate){app.run()}}
+}
+
+struct CrosshairColorPicker:View {
+    @AppStorage("captureCrosshairColor") private var name="Cyan"
+    var body:some View {
+        HStack{Text("Capture crosshair colour");Spacer()
+            ForEach(CaptureCrosshair.options,id:\.name){option in
+                Button{name=option.name}label:{Circle().fill(Color(nsColor:option.color)).frame(width:20,height:20).overlay{Circle().strokeBorder(.white,lineWidth:name==option.name ? 2:0)}.padding(2)}.buttonStyle(.plain).help(option.name)
+            }
+        }
+    }
 }

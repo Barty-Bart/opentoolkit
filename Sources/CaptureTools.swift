@@ -39,7 +39,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     /// Tool shortcuts are global hotkeys, so they exist only while drawing is on.
     var onDrawingActiveChanged: ((Bool) -> Void)?
     var isDrawingActive: Bool { heldDrawingTool != nil }
-    private var annotationColor = NSColor.systemOrange
+    /// Remembered screen-drawing colour (Annotation page swatches, palette and colour keys).
+    private var annotationColor: NSColor { get { AnnotationColor.saved } set { AnnotationColor.save(newValue) } }
     private var palette: NSPanel?
     private var paletteController: DrawingToolbarController?
     private var previewPanels:[UUID:NSPanel]=[:]
@@ -160,8 +161,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                         self.captures.insert(item, at: 0)
                         self.trayItems.insert(item, at: 0)
                         self.saveTrayState()
+                        CaptureSound.play()
                         self.showTray()
-                        self.report("Screenshot ready · drag the thumbnail into an app, or double-click to edit")
+                        self.report("Screenshot ready · drag the thumbnail into an app, or click to edit")
                     } else {
                         try? FileManager.default.removeItem(at: output)
                         self.showTray()
@@ -392,19 +394,30 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         if !previewsHidden {hiddenPinned=pinnedPreviews.filter{$0.isVisible}}
         previewsHidden=true
         previewPanels.values.forEach{$0.orderOut(nil)}
-        recentPanel?.orderOut(nil)
+        hideRecentHistory()
         pinnedPreviews.forEach{$0.orderOut(nil)}
     }
+    var onShowAllHistory:(()->Void)?
+    private var recentOutsideMonitor:Any?
+    /// CleanShot-style history: a glass bar slides down across the top of the screen.
     func showRecentHistory() {
         guard !captureInFlight,selectionWindows.isEmpty else{return}
-        let visible=(NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x:0,y:0,width:1000,height:800)
-        let panel=recentPanel ?? NSPanel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
-        panel.isOpaque=false;panel.backgroundColor = .clear;panel.hasShadow=true;panel.level = .floating;panel.hidesOnDeactivate=false
-        panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]
-        panel.contentView=NSHostingView(rootView:RecentCaptureStrip(coordinator:self,onClose:{[weak panel] in panel?.orderOut(nil)}))
-        let width=min(visible.width-36,max(360,CGFloat(min(captures.count,10))*166+36))
-        panel.setFrame(CGRect(x:visible.midX-width/2,y:visible.maxY-180,width:width,height:164),display:true)
-        panel.orderFrontRegardless();recentPanel=panel
+        if recentPanel?.isVisible == true {hideRecentHistory();return}
+        let screen=NSScreen.screens.first{NSMouseInRect(NSEvent.mouseLocation,$0.frame,false)} ?? NSScreen.main ?? NSScreen.screens.first
+        let visible=screen?.visibleFrame ?? CGRect(x:0,y:0,width:1000,height:800)
+        let height:CGFloat=176
+        let host=NSHostingView(rootView:RecentCaptureStrip(coordinator:self,onClose:{[weak self] in self?.hideRecentHistory()},onShowAll:{[weak self] in self?.hideRecentHistory();self?.onShowAllHistory?()}))
+        let panel=CaptureBarPanel(content:host);panel.onCancel={[weak self] in self?.hideRecentHistory()}
+        let frame=CGRect(x:visible.minX+12,y:visible.maxY-height-8,width:visible.width-24,height:height)
+        panel.setFrame(frame.offsetBy(dx:0,dy:height),display:false);panel.alphaValue=0
+        panel.makeKeyAndOrderFront(nil);recentPanel=panel
+        NSAnimationContext.runAnimationGroup{context in context.duration=0.18;panel.animator().setFrame(frame,display:true);panel.animator().alphaValue=1}
+        // A click anywhere else closes it, like a menu.
+        recentOutsideMonitor=NSEvent.addGlobalMonitorForEvents(matching:[.leftMouseDown,.rightMouseDown]){[weak self] _ in Task{@MainActor in self?.hideRecentHistory()}}
+    }
+    func hideRecentHistory(){
+        if let monitor=recentOutsideMonitor {NSEvent.removeMonitor(monitor);recentOutsideMonitor=nil}
+        recentPanel?.orderOut(nil);recentPanel=nil
     }
     private func showTray() {
         guard !captureInFlight,selectionWindows.isEmpty else{return}
@@ -426,7 +439,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             // or action controls. SwiftUI contextMenu can get stuck on a panel
             // that deliberately never activates the app.
             host.menu=menu;panel.contentView=host
-            panel.setFrame(CGRect(x:visible.minX+18,y:visible.minY+18+CGFloat(i)*140,width:200,height:128),display:true)
+            panel.setFrame(CGRect(x:visible.minX+18,y:visible.minY+18+CGFloat(visibleItems.count-1-i)*140,width:200,height:128),display:true)
             panel.orderFrontRegardless();previewPanels[item.id]=panel
         }
     }
@@ -488,15 +501,30 @@ private final class CapturePreviewInteraction:NSObject,ObservableObject,NSMenuDe
 private struct RecentCaptureStrip:View {
     @ObservedObject var coordinator:CaptureCoordinator
     let onClose:()->Void
+    let onShowAll:()->Void
     var body:some View {
-        VStack(alignment:.leading,spacing:10) {
-            HStack {Text("Recent screenshots").font(.headline);Text("Latest 10 · drag into an editor or app").font(.caption).foregroundStyle(.secondary);Spacer();Button(action:onClose){Image(systemName:"xmark")}.buttonStyle(.plain).help("Hide history strip")}
-            if coordinator.captures.isEmpty {Text("Your screenshots will appear here.").foregroundStyle(.secondary)}
-            ScrollView(.horizontal,showsIndicators:true) {
-                HStack(spacing:12) {ForEach(Array(coordinator.captures.prefix(10))){item in
-                    CaptureDragPreview(url:item.url,onClick:{coordinator.openEditor(item)},onOpen:{coordinator.openEditor(item)}).frame(width:154,height:98).background(.black.opacity(0.2),in:RoundedRectangle(cornerRadius:8)).contextMenu{Button("Edit"){coordinator.openEditor(item)};Button("Show floating preview"){coordinator.restorePreview(item)};Button("Save as…"){coordinator.saveAs(item)}}}}
+        VStack(alignment:.leading,spacing:8) {
+            HStack {
+                Text("Recent screenshots").font(.headline)
+                Text("Click to bring one back · drag into any app").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Show all…",action:onShowAll).controlSize(.small)
+                Button(action:onClose){Image(systemName:"xmark").font(.system(size:12,weight:.semibold))}.buttonStyle(.plain).help("Close (Escape)")
             }
-        }.padding(14).background(Color(red:0.10,green:0.12,blue:0.15),in:RoundedRectangle(cornerRadius:14)).preferredColorScheme(.dark)
+            if coordinator.captures.isEmpty {Spacer();Text("Your screenshots will appear here.").foregroundStyle(.secondary).frame(maxWidth:.infinity);Spacer()}
+            else {
+                ScrollView(.horizontal,showsIndicators:false) {
+                    HStack(spacing:12) {ForEach(Array(coordinator.captures.prefix(12))){item in
+                        VStack(spacing:4){
+                            CaptureDragPreview(url:item.url,onClick:{coordinator.restorePreview(item);onClose()},onOpen:{coordinator.openEditor(item);onClose()},onDropped:onClose)
+                                .frame(width:170,height:106).background(.black.opacity(0.25),in:RoundedRectangle(cornerRadius:8))
+                                .contextMenu{Button("Edit"){coordinator.openEditor(item);onClose()};Button("Bring back to screen"){coordinator.restorePreview(item);onClose()};Button("Save as…"){coordinator.saveAs(item);onClose()}}
+                            Text(item.date,style:.relative).font(.system(size:10)).foregroundStyle(.secondary)
+                        }
+                    }}.padding(.vertical,2)
+                }
+            }
+        }.padding(.horizontal,16).padding(.vertical,12).foregroundStyle(.white).preferredColorScheme(.dark)
     }
 }
 private struct CaptureTrayCard:View {
@@ -506,7 +534,8 @@ private struct CaptureTrayCard:View {
     let contextMenu:NSMenu
     var body:some View {
         ZStack(alignment:.bottom){
-            CaptureDragPreview(url:item.url,onOpen:{coordinator.openEditor(item)},contextMenu:contextMenu)
+            // Like CleanShot: a click opens the editor, a drag drops the file into another app.
+            CaptureDragPreview(url:item.url,onClick:{coordinator.openEditor(item)},onOpen:{coordinator.openEditor(item)},onDropped:{coordinator.dismiss(item)},contextMenu:contextMenu)
                 .frame(width:190,height:118).background(Color.black.opacity(0.2))
             if interaction.hovering {
                 Color.black.opacity(0.48).allowsHitTesting(false)
@@ -525,7 +554,7 @@ private struct CaptureTrayCard:View {
                     HStack {
                         corner("pencil",help:"Edit screenshot"){coordinator.openEditor(item)}
                         Spacer()
-                        corner("folder",help:"Show local image in Finder"){coordinator.reveal(item)}
+                        corner("folder",help:"Show in Finder"){coordinator.reveal(item)}
                     }
                 }.padding(7)
             }
@@ -574,13 +603,23 @@ private final class RegionSelectionView: NSView {
     private var anchor: CGPoint?
     private var selection: CGRect?
     private var tracking: NSTrackingArea?
+    /// Drawn crosshair: a nonactivating overlay can't change the system cursor,
+    /// so capture mode is shown with guide lines in the user's chosen colour.
+    private var pointer: CGPoint?
+    private let crosshairColor = CaptureCrosshair.color
     override var acceptsFirstResponder: Bool { true }
 
     init(frame: CGRect, fixedSize: CGSize?) { self.fixedSize = fixedSize; super.init(frame: frame) }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window, NSMouseInRect(NSEvent.mouseLocation, window.frame, false) else { return }
+        pointer = convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil); needsDisplay = true
+    }
+    override func mouseExited(with event: NSEvent) { pointer = nil; needsDisplay = true }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
-        tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(tracking!); super.updateTrackingAreas()
     }
     private func point(_ event: NSEvent) -> CGPoint {
@@ -593,7 +632,9 @@ private final class RegionSelectionView: NSView {
         return CGRect(x: min(bounds.width - width, max(0, p.x - width / 2)), y: min(bounds.height - height, max(0, p.y - height / 2)), width: width, height: height)
     }
     override func mouseMoved(with event: NSEvent) {
-        if fixedSize != nil, anchor == nil { selection = fixedRect(at: point(event)); needsDisplay = true }
+        pointer = point(event)
+        if fixedSize != nil, anchor == nil { selection = fixedRect(at: pointer!) }
+        needsDisplay = true
     }
     override func mouseDown(with event: NSEvent) {
         window?.makeKey(); anchor = point(event)
@@ -602,16 +643,33 @@ private final class RegionSelectionView: NSView {
     }
     override func mouseDragged(with event: NSEvent) {
         guard let anchor else { return }
-        let p = point(event)
+        let p = point(event); pointer = p
         selection = fixedSize == nil ? CGRect(x: min(anchor.x, p.x), y: min(anchor.y, p.y), width: abs(p.x - anchor.x), height: abs(p.y - anchor.y)) : fixedRect(at: p)
         needsDisplay = true
     }
     override func mouseUp(with event: NSEvent) { if let selection { onComplete?(selection) } }
+    private func drawCrosshair(at p: CGPoint) {
+        let x = p.x.rounded() + 0.5, y = p.y.rounded() + 0.5
+        let guides = NSBezierPath()
+        guides.move(to: CGPoint(x: bounds.minX, y: y)); guides.line(to: CGPoint(x: bounds.maxX, y: y))
+        guides.move(to: CGPoint(x: x, y: bounds.minY)); guides.line(to: CGPoint(x: x, y: bounds.maxY))
+        NSColor.black.withAlphaComponent(0.35).setStroke(); guides.lineWidth = 3; guides.stroke()
+        crosshairColor.withAlphaComponent(0.9).setStroke(); guides.lineWidth = 1; guides.stroke()
+        let ring = NSBezierPath(ovalIn: CGRect(x: x - 9, y: y - 9, width: 18, height: 18))
+        NSColor.black.withAlphaComponent(0.5).setStroke(); ring.lineWidth = 4; ring.stroke()
+        crosshairColor.setStroke(); ring.lineWidth = 2; ring.stroke()
+        let label = "\(Int(p.x)), \(Int(bounds.height - p.y))"
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.white, .backgroundColor: NSColor.black.withAlphaComponent(0.65)]
+        let size = (label as NSString).size(withAttributes: attrs)
+        let origin = CGPoint(x: min(x + 14, bounds.maxX - size.width - 4), y: max(4, y - size.height - 14))
+        (label as NSString).draw(at: origin, withAttributes: attrs)
+    }
     override func keyDown(with event: NSEvent) { if event.keyCode == 53 { onCancel?() } else { super.keyDown(with: event) } }
     override func draw(_ dirtyRect: NSRect) {
         // Keep the screen at its normal brightness. Only the selection outline
         // and compact help labels are drawn over the underlying app.
         NSColor.clear.setFill(); bounds.fill(using: .copy)
+        if fixedSize == nil, anchor == nil, let p = pointer { drawCrosshair(at: p) }
         if let selection, selection.width > 0, selection.height > 0 {
             let outline = NSBezierPath(rect: selection)
             NSColor.black.withAlphaComponent(0.75).setStroke(); outline.lineWidth = 3; outline.stroke()
@@ -667,8 +725,8 @@ private final class DrawingToolbarController: NSObject {
         return container
     }
     @objc private func changeTool(_ sender: NSSegmentedControl) { guard displayedTools.indices.contains(sender.selectedSegment) else { return }; surfaces.forEach { $0.tool = displayedTools[sender.selectedSegment] } }
-    @objc private func changeColor(_ sender: NSPopUpButton) { let color = colors[max(0, sender.indexOfSelectedItem)].1; surfaces.forEach { $0.color = color } }
-    @objc private func customColor(_ sender:NSColorWell){surfaces.forEach{$0.color=sender.color}}
+    @objc private func changeColor(_ sender: NSPopUpButton) { let color = colors[max(0, sender.indexOfSelectedItem)].1; AnnotationColor.save(color); surfaces.forEach { $0.color = color } }
+    @objc private func customColor(_ sender:NSColorWell){AnnotationColor.save(sender.color);surfaces.forEach{$0.color=sender.color}}
     @objc private func changeTextSize(_ sender:NSPopUpButton){if let value=Double(sender.titleOfSelectedItem ?? "24"){surfaces.forEach{$0.textSize=CGFloat(value)}}}
     @objc private func combineDirection(_ sender:NSPopUpButton){surfaces.forEach{$0.combineHorizontal=sender.indexOfSelectedItem==1}}
     @objc private func changeWidth(_ sender: NSSlider) { surfaces.forEach { $0.strokeWidth = CGFloat(sender.doubleValue) } }
@@ -680,4 +738,33 @@ private final class DrawingToolbarController: NSObject {
     @objc private func save() { onSave?() }
     @objc private func saveAs() { onSaveAs?() }
     @objc private func copyImage() { onCopy?() }
+}
+
+/// Colour of the drawn capture crosshair (Screenshots › Settings).
+enum CaptureCrosshair {
+    static let options: [(name: String, color: NSColor)] = [("Cyan", .systemTeal), ("Yellow", .systemYellow), ("Pink", .systemPink), ("Green", .systemGreen), ("Orange", .systemOrange), ("White", .white)]
+    static var color: NSColor {
+        let name = UserDefaults.standard.string(forKey: "captureCrosshairColor") ?? "Cyan"
+        return options.first { $0.name == name }?.color ?? .systemTeal
+    }
+}
+
+enum AnnotationColor {
+    static let swatches: [(name: String, color: NSColor)] = [("Red", .systemRed), ("Orange", .systemOrange), ("Yellow", .systemYellow), ("Green", .systemGreen), ("Blue", .systemBlue), ("Pink", .systemPink), ("Purple", .systemPurple), ("White", .white), ("Black", .black)]
+    static var saved: NSColor {
+        let parts = (UserDefaults.standard.string(forKey: "annotationColor") ?? "").split(separator: ",").compactMap { Double($0) }
+        guard parts.count == 4 else { return .systemOrange }
+        return NSColor(srgbRed: parts[0], green: parts[1], blue: parts[2], alpha: parts[3])
+    }
+    static func save(_ color: NSColor) {
+        guard let c = color.usingColorSpace(.sRGB) else { return }
+        UserDefaults.standard.set([c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent].map { String(format: "%.4f", $0) }.joined(separator: ","), forKey: "annotationColor")
+    }
+}
+
+/// macOS's own screenshot shutter sound, on by default (Screenshots › Settings).
+enum CaptureSound {
+    static var enabled: Bool { UserDefaults.standard.object(forKey: "captureSound") as? Bool ?? true }
+    private static let sound = NSSound(contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif", byReference: true)
+    static func play() { guard enabled else { return }; sound?.stop(); sound?.play() }
 }

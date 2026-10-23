@@ -14,11 +14,12 @@ struct CaptureDragPreview:NSViewRepresentable {
     let url:URL
     var onClick:(()->Void)?
     var onOpen:(()->Void)?
+    var onDropped:(()->Void)?
     var contextMenu:NSMenu?
     func makeNSView(context:Context)->CaptureDragImageView {CaptureDragImageView()}
     func updateNSView(_ view:CaptureDragImageView,context:Context) {
         view.url=url;view.image=captureThumbnail(url,maxPixels:420)
-        view.onClick=onClick;view.onOpen=onOpen;view.menu=contextMenu
+        view.onClick=onClick;view.onOpen=onOpen;view.onDropped=onDropped;view.menu=contextMenu
     }
 }
 final class CaptureDragImageView:NSView,NSDraggingSource {
@@ -26,10 +27,11 @@ final class CaptureDragImageView:NSView,NSDraggingSource {
     var url:URL?
     var onClick:(()->Void)?
     var onOpen:(()->Void)?
+    var onDropped:(()->Void)?
     private var origin=CGPoint.zero
     private var dragging=false
     private var contextClick=false
-    override init(frame:NSRect) {super.init(frame:frame);setAccessibilityElement(true);setAccessibilityRole(.image);setAccessibilityLabel("Screenshot preview. Drag to another app or double-click to edit.")}
+    override init(frame:NSRect) {super.init(frame:frame);setAccessibilityElement(true);setAccessibilityRole(.image);setAccessibilityLabel("Screenshot preview. Click to edit, or drag into another app.")}
     required init?(coder:NSCoder){fatalError()}
     override func draw(_ dirtyRect:NSRect) {
         guard let image else{return}
@@ -60,4 +62,8 @@ final class CaptureDragImageView:NSView,NSDraggingSource {
     }
     func draggingSession(_ session:NSDraggingSession,sourceOperationMaskFor context:NSDraggingContext)->NSDragOperation {.copy}
     func ignoreModifierKeys(for session:NSDraggingSession)->Bool {true}
+    func draggingSession(_ session:NSDraggingSession,endedAt screenPoint:NSPoint,operation:NSDragOperation){
+        // Only a drop another app accepted counts; a cancelled drag keeps the thumbnail.
+        if !operation.isEmpty {DispatchQueue.main.async{[weak self] in self?.onDropped?()}}
+    }
 }

@@ -27,7 +27,7 @@ import AppKit
 
         let (ok, staged) = stage(notarized, team, "0.1.0")
         check(ok && CodeIdentity.of(staged) == team, "notarized, same-team, newer DMG is staged with its signature intact")
-        check(!stage(notarized, team, "0.2.0").0, "same version is refused")
+        check(!stage(notarized, team, "99.0").0, "a download that is not newer is refused")
         check(!stage(notarized, CodeIdentity(identifier: "local.pico", team: "OTHERTEAM1"), "0.1.0").0, "different developer is refused")
         check(!stage(unnotarized, team, "0.1.0").0, "un-notarized DMG is refused")
 

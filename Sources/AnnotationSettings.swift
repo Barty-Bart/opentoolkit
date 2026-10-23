@@ -10,8 +10,12 @@ struct AnnotationSettings: View {
             ToolCard(title:"Draw on screen",subtitle:"Press \(shortcutLabel(model.keys["drawing"] ?? "D",model.modifiers("drawing"))) to start drawing and again to stop, or hold it to draw only while it’s held. Your marks stay on screen until you clear them. Escape also stops drawing.",accent:.orange) {
                 Toggle("Enable screen drawing",isOn:Binding(get:{model.enabled("drawing")},set:{model.toggle("drawing",$0)}))
                 HStack {Button("Start drawing"){if !model.capture.isDrawingActive {model.perform("drawing")}};Button("Clear screen"){model.capture.clearAnnotations()}}
-                HStack {Text("Line width");Slider(value:$width,in:1...16,step:1);Text("\(Int(width))").monospacedDigit()}
-                HStack {Text("Text size");Slider(value:$textSize,in:12...64,step:1);Text("\(Int(textSize))").monospacedDigit()}
+                HStack(spacing:18) {
+                    HStack(spacing:6){Text("Line");Picker("Line width",selection:$width){ForEach([1.0,2,4,6,8,12,16],id:\.self){Text("\(Int($0)) pt").tag($0)}}.labelsHidden().frame(width:80)}
+                    HStack(spacing:6){Text("Text");Picker("Text size",selection:$textSize){ForEach([16.0,20,24,32,36,48,64],id:\.self){Text("\(Int($0)) pt").tag($0)}}.labelsHidden().frame(width:80)}
+                    Spacer()
+                }
+                AnnotationColorRow()
             }
             ToolCard(title:"Tool shortcuts while drawing",subtitle:"These work only while drawing is on, so keys like ⌃A and ⌃E keep working in your other apps. Undo, Clear and colours take one press.",accent:.orange) {
                 DrawingToolShortcutRows(model:model)
@@ -45,5 +49,30 @@ struct DrawingToolShortcutRows:View {
         let chord=modifier+"+"+key
         if let other=model.annotationKeys.first(where:{$0.key != name && $0.value==chord})?.key {issue="That key is already the “\(other.capitalized)” drawing key.";return}
         issue="";model.annotationKeys[name]=chord;model.registerHotkeys()
+    }
+}
+
+/// Default screen-drawing colour; the palette and colour keys update it too.
+struct AnnotationColorRow:View {
+    @State private var selected=AnnotationColor.saved
+    var body:some View {
+        HStack(spacing:6){
+            Text("Colour").padding(.trailing,6)
+            ForEach(AnnotationColor.swatches,id:\.name){swatch in
+                Button{AnnotationColor.save(swatch.color);selected=swatch.color}label:{
+                    Circle().fill(Color(nsColor:swatch.color)).frame(width:20,height:20)
+                        .overlay{Circle().strokeBorder(.white.opacity(swatch.name=="Black" ? 0.5:0),lineWidth:1)}
+                        .overlay{Circle().strokeBorder(.white,lineWidth:selected.isClose(to:swatch.color) ? 2:0).padding(-3)}
+                }.buttonStyle(.plain).help(swatch.name)
+            }
+            ColorPicker("Custom colour",selection:Binding(get:{Color(nsColor:selected)},set:{let c=NSColor($0);AnnotationColor.save(c);selected=c}),supportsOpacity:false).labelsHidden().help("Custom colour")
+            Spacer()
+        }
+    }
+}
+extension NSColor {
+    func isClose(to other:NSColor)->Bool {
+        guard let a=usingColorSpace(.sRGB),let b=other.usingColorSpace(.sRGB) else{return false}
+        return abs(a.redComponent-b.redComponent)+abs(a.greenComponent-b.greenComponent)+abs(a.blueComponent-b.blueComponent)<0.02
     }
 }
