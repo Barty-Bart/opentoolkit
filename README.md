@@ -2,64 +2,102 @@
 
 ### Speak it. Capture it. Make it clear.
 
-Your everyday Mac tools in one local app — dictation, screenshots, screen annotation and recording, with optional notes.
+Local dictation, screenshots, screen drawing and recording in one free Mac app. Hold **Fn** or say **"Hey Toolkit"** to dictate. Lost the text? **Double-tap Shift** and your last dictation pastes again.
 
-**Apple Silicon · macOS 14+ · Early preview**
+**Apple Silicon · macOS 14+ · Free and open source (MIT) · Notarized by Apple · Early preview**
 
-| | What you can do |
+[Download the latest release →](https://github.com/Barty-Bart/opentoolkit/releases/latest) · [opentoolkit.app](https://opentoolkit.app)
+
+![Dictating into a Mail message: a cyan outline marks the text box and a small level meter sits under the cursor](docs/images/dictation.jpg)
+
+## What it does
+
+| | |
 | --- | --- |
-| 🎙️ **Dictation** | Hold **Fn** and speak into your text box. Choose Parakeet or Whisper, live typing, colours and sounds. |
-| 🪄 **Word corrections** | Review suggested corrections after editing a dictation. Save a replacement, undo it, or disable it in Corrections. Support depends on the target text box. |
-| ↩️ **Recover a transcript** | **Double-tap Shift** to paste your last saved transcript. Triple-tap to open history. The key is customisable. |
-| 👋 **Hey Toolkit** | Say the wake phrase, wait for the cue, then choose a command. Wake listening is optional. |
-| ✨ **Writing modes** | Tidy spacing, format messages, or use a separate local AI model for bullet summaries and email drafts. |
-| 📸 **Screenshots** | Capture a freeform area or full screen. Keep recent captures nearby, edit them, or drag them into another app. |
-| ✏️ **Screenshot editor** | Crop, add text, arrows, shapes, numbered markers and redaction. Undo, zoom, combine images, copy or save. |
-| 🖍️ **Screen annotation** | Draw over your screen with configurable hotkeys, then clear it when finished. |
-| 🎬 **Screen recording** | Capture a region as video or GIF. Capture options include fixed dimensions and scrolling screenshots. |
-| 📝 **Notes · experimental** | Optional local notes, folders, keyword search and meeting transcripts. Off by default. |
+| **Dictation** | Hold **Fn** and speak into the text box you're in. Speech is transcribed on your Mac with Parakeet or Whisper. Switch to AirPods or a headset and it picks up the new microphone by itself. |
+| **Dictation history** | **Double-tap Shift** to paste your last transcript again. **Triple-tap** to open everything you've dictated. The key is customisable. |
+| **Hey Toolkit** | Say the wake phrase, wait for the cue, then a command: start dictating, take a screenshot, draw on screen, record my screen. A glow around the pointer shows it's listening. Optional and off until you turn it on. |
+| **Screenshots** | **⇧⌘4** for an area, on any display. Thumbnails stack in the corner of the display you're on; drag one into another app, or double-click to edit. |
+| **Capture bar** | **⇧⌘5** opens a glass capture bar: full screen, fixed dimensions, scrolling capture, video and GIF. |
+| **Screenshot editor** | A real canvas you can resize, a second image as its own layer, pinch to zoom. Arrows, shapes, text, numbered steps, redaction and a highlighter that snaps onto words. |
+| **Screen drawing** | **⌥⌘D** to draw over your screen. Press it again to stop, or hold it to draw only while it's held. Marks stay until you clear them. |
+| **Screen recording** | Record a region as video or GIF. Optionally show a larger cursor, a highlight ring and click ripples. |
+| **Home** | Words dictated, typing time saved, captures, recordings, when you work and the words you say most. Counted on your Mac; you can turn it off. |
+| **Word corrections** | Review suggested corrections after editing a dictation. Save a replacement, undo it, or disable it in Corrections. Support depends on the target text box. |
+| **Writing modes** | Tidy spacing and format messages. Optional: bullet summaries and email drafts with a local AI model you run yourself, such as one in LM Studio. |
+| **Notes · experimental** | Optional local notes, folders, keyword search and meeting transcripts. Off by default. |
+| **Updates** | One click from the menu bar. Each update is checked for Apple notarization and the same developer signature before it installs. |
 
-![OpenToolkit screenshot editor with synthetic demonstration artwork](docs/images/screenshot-editor.png)
+<table>
+<tr>
+<td width="50%"><img src="docs/images/history.jpg" alt="Speech history with the newest dictation at the top and a Copy button"><br><sub><b>Double-tap Shift</b> pastes your last dictation. Triple-tap opens this list.</sub></td>
+<td width="50%"><img src="docs/images/draw.jpg" alt="A slide with an orange circle and arrow drawn over it and a glow around the pointer"><br><sub><b>"Hey Toolkit… draw on screen"</b>, or press ⌥⌘D.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/images/capture.jpg" alt="Selecting a chart with the glass capture bar and thumbnails in the corner"><br><sub><b>⇧⌘4</b> for an area, <b>⇧⌘5</b> for the capture bar.</sub></td>
+<td width="50%"><img src="docs/images/editor.jpg" alt="The screenshot editor with numbered steps, a highlighted link and a redacted email address"><br><sub>The editor: steps, highlight, redaction, arrows.</sub></td>
+</tr>
+<tr>
+<td colspan="2"><img src="docs/images/home.jpg" alt="The Home page with weekly totals, an activity heatmap, words by app and a word cloud"><br><sub><b>Home</b>: your week, counted on your Mac.</sub></td>
+</tr>
+</table>
 
-*The actual editor, using demonstration artwork. Your captures stay local unless you choose to share them.*
+<sub>Screens are illustrations of the app with made-up content.</sub>
 
-## Say “Hey Toolkit”
+## Say "Hey Toolkit"
+
+Turn on **Listen for wake phrase** on the Dictation card first.
 
 ```text
-“Hey Toolkit” → wait for the sound / waveform → “start dictating”
-                                             “take a screenshot”
-                                             “summarize into bullet points”
-                                             “turn this into an email”
+"Hey Toolkit" → wait for the sound / waveform → "start dictating"
+                                             "take a screenshot"
+                                             "draw on screen"
+                                             "record my screen"
 ```
 
-The command window lasts eight seconds. To finish, say **“Hey Toolkit”**, wait for its cue, then **“stop transcribing”**. Change the wake phrase and actions in **Dictation → Customize wake phrase & commands**. Sending, Notes and meeting capture require their settings to be enabled. AI writing needs a local text model such as one served by LM Studio.
+The command window lasts eight seconds. To finish dictating, say **"Hey Toolkit"**, wait for its cue, then **"stop transcribing"**. Change the wake phrase and actions in **Dictation → Customize wake phrase & commands**. Sending, Notes and meeting capture require their settings to be enabled. "Summarize into bullet points" and "turn this into an email" need a local text model, such as one served by LM Studio.
 
 ## Get started
 
-**Source preview:** install Python 3.12 and Xcode Command Line Tools, clone this repository, then run:
+1. Download the DMG from the [latest release](https://github.com/Barty-Bart/opentoolkit/releases/latest).
+2. Open it and drag **OpenToolkit** into Applications, then open it from there.
+3. Pick the tools you want and grant the macOS permissions it asks for. The dictation model downloads the first time you use it, and retries by itself if the download is interrupted.
+4. Hold **Fn** and start talking.
+
+No Python, Homebrew or developer tools needed. OpenToolkit appears in the menu bar and the Dock. It does not import another app's history.
+
+**Build from source:** install Python 3.12 and Xcode Command Line Tools, clone this repository, then run:
 
 ```sh
 python3.12 scripts/install.py --check
 python3.12 scripts/install.py
 ```
 
-The app appears in `~/Applications/OpenToolkit.app`, in the Dock and in the menu bar. Setup downloads the speech dependencies and model, then guides you through the required Mac permissions. It does not import another app’s history.
+The app appears in `~/Applications/OpenToolkit.app`. Setup downloads the speech dependencies and model, then guides you through the required Mac permissions.
 
-**DMG:** download the notarized DMG from [GitHub Releases](https://github.com/Barty-Bart/opentoolkit/releases), open it and drag OpenToolkit into Applications. To update later, choose **Check for Updates…** in the menu bar: OpenToolkit downloads the new release, checks that Apple notarized it and that it's signed by the same developer, then restarts into the new version. Your history, settings and permissions stay as they are.
+[Installation, permissions and existing models →](docs/installation.md)
 
-[Installation, updating and existing models →](docs/installation.md)
+## Update
+
+Choose **Check for Updates…** in the menu bar, then **Download & install**. OpenToolkit also checks once a day and shows a dot on the menu-bar icon when a new version is ready.
+
+It waits until you're not dictating or recording, downloads the release from this repository, and installs it only if Apple notarized it and it's signed by the same developer. Then it restarts into the new version. Your history, settings and permissions stay as they are, and the previous version is kept for rollback.
 
 ## Useful shortcuts
 
 | Action | Default |
 | --- | --- |
 | Dictate | Hold Fn, or tap to toggle |
-| Recover last transcript / open history | Double / triple Shift |
+| Start or stop dictation | ⌥ ⌘ T |
+| Paste last transcript again | Double-tap Shift |
+| Open dictation history | Triple-tap Shift |
 | Capture area | ⌘ ⇧ 4 |
 | Capture full screen | ⌘ ⇧ 3 |
-| Capture options: dimensions, scrolling, video & GIF | ⌘ ⇧ 5 |
+| Capture bar: dimensions, scrolling, video & GIF | ⌘ ⇧ 5 |
+| Draw on screen | ⌥ ⌘ D |
+| Record screen | ⌥ ⌘ R |
 
-Shortcuts are configurable. Disable conflicting shortcuts in another capture tool or macOS if necessary.
+Shortcuts are configurable. If macOS or another capture tool also uses ⌘ ⇧ 3/4/5, turn theirs off.
 
 ## Local by default
 
