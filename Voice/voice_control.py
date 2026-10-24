@@ -12,6 +12,17 @@ from wake_engine import Detector, MODEL, validate_phrase, command_phrases, detec
 from runtime_paths import speech_data, speech_resources
 log=logging.getLogger('multitool.voice')
 
+def open_microphone(callback,refresh=False):
+    """A 16 kHz mono input stream on the current default microphone. After the default
+    microphone changes, PortAudio still lists the old devices; refreshing re-reads them."""
+    def stream():return sd.InputStream(samplerate=16000,channels=1,dtype='float32',blocksize=1600,callback=callback)
+    if not refresh:
+        try:return stream()
+        except sd.PortAudioError:log.info('microphone open failed; refreshing the audio device list')
+    sd._terminate();sd._initialize()
+    return stream()
+
+
 def microphone_access():
     """This process's microphone permission: 0 not asked, 1 restricted, 2 denied, 3 allowed."""
     try:
@@ -503,20 +514,29 @@ class VoiceControl:
         if not discard:self.queue_segment()
         self.long_mode=None;self.segment=[];self.segment_frames=0;self.epoch+=1;self.label();self.emit('session_stopped',mode=mode,session=session)
     def _microphone(self):
-        stream=None
+        # Switching microphones (AirPods, a headset, a display) leaves PortAudio's device
+        # list stale, so a failed open refreshes it and later tries again by itself.
+        stream=None;retry_at=0.0;failures=0
         while True:
             wanted=self.enabled or self.d.recording or self.long_mode is not None
             try:
-                if wanted and stream is None:
-                    stream=sd.InputStream(samplerate=16000,channels=1,dtype='float32',blocksize=1600,callback=self._audio)
-                    stream.start();self.mic_ready=True;AppHelper.callAfter(self.label)
+                if wanted and stream is not None and not stream.active:
+                    log.info('microphone stream stopped; reopening');self.mic_ready=False
+                    try:stream.close()
+                    except Exception:pass
+                    stream=None
+                if wanted and stream is None and time.monotonic()>=retry_at:
+                    stream=open_microphone(self._audio,refresh=failures>0)
+                    stream.start();self.mic_ready=True;failures=0;AppHelper.callAfter(self.label)
                     if self.d.recording:
                         AppHelper.callAfter(self.d.start_audio_feedback)
                 elif not wanted and stream is not None:
                     self.mic_ready=False;stream.stop();stream.close();stream=None
             except Exception:
-                log.exception('microphone unavailable');self.mic_ready=False;self.enabled=False;stream=None
-                AppHelper.callAfter(self.d.stop,False);AppHelper.callAfter(self.stop_long);AppHelper.callAfter(self.label,'Microphone unavailable — reset speech')
+                if failures==0:log.exception('microphone unavailable')
+                failures+=1;self.mic_ready=False;stream=None;retry_at=time.monotonic()+min(10,2*failures)
+                # Keep the wake setting: listening resumes as soon as the microphone opens again.
+                AppHelper.callAfter(self.d.stop,False);AppHelper.callAfter(self.stop_long);AppHelper.callAfter(self.label,'Microphone unavailable — retrying…')
             time.sleep(.05)
     def _detect(self):
         detector=None;previous=-1

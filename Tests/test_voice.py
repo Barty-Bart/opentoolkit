@@ -972,6 +972,44 @@ class ModelDownloadRetryTests(unittest.TestCase):
         self.assertIn("state['modelError']=True", source)
 
 
+class MicrophoneRecoveryTests(unittest.TestCase):
+    """A changed default microphone recovers without restarting speech; no real audio device is opened."""
+    def fake_sd(self, failures):
+        calls = []
+        class PortAudioError(Exception): pass
+        def stream(**kwargs):
+            calls.append("open")
+            if calls.count("open") <= failures: raise PortAudioError("Internal PortAudio error [PaErrorCode -9986]")
+            return "stream"
+        return types.SimpleNamespace(PortAudioError=PortAudioError, InputStream=stream,
+                                     _terminate=lambda: calls.append("terminate"), _initialize=lambda: calls.append("initialize")), calls
+
+    def test_stale_device_list_is_refreshed_and_opened_again(self):
+        fake, calls = self.fake_sd(failures=1)
+        with patch.object(v, "sd", fake):
+            self.assertEqual(v.open_microphone(lambda *a: None), "stream")
+        self.assertEqual(calls, ["open", "terminate", "initialize", "open"])
+
+    def test_healthy_microphone_opens_without_a_refresh(self):
+        fake, calls = self.fake_sd(failures=0)
+        with patch.object(v, "sd", fake):
+            v.open_microphone(lambda *a: None)
+        self.assertEqual(calls, ["open"])
+
+    def test_retries_refresh_straight_away(self):
+        fake, calls = self.fake_sd(failures=0)
+        with patch.object(v, "sd", fake):
+            v.open_microphone(lambda *a: None, refresh=True)
+        self.assertEqual(calls, ["terminate", "initialize", "open"])
+
+    def test_a_failure_keeps_the_wake_setting_and_retries(self):
+        source = (ROOT / "Voice" / "voice_control.py").read_text()
+        body = source[source.index("def _microphone(self):"):source.index("def _detect(self):")]
+        self.assertNotIn("self.enabled=False", body)
+        self.assertIn("retry_at", body)
+        self.assertIn("not stream.active", body)
+
+
 class EarlyStatusTests(unittest.TestCase):
     """The worker reports permissions before the model loads; synthetic folder only."""
     def test_state_is_written_atomically_and_privately(self):
