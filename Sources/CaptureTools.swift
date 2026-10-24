@@ -139,7 +139,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         cursor.push()
         // Follow the pointer onto any display; that display's overlay takes Escape.
         let follow: () -> Void = { [weak self, weak state] in
-            guard let self, let state else { return }
+            // Pointer events queued before the selection closed must not bring the crosshair back.
+            guard let self, let state, !self.selectionWindows.isEmpty, self.selectionGeneration == generation else { return }
             let p = NSEvent.mouseLocation
             state.moved(to: p)
             cursor.set()
@@ -233,9 +234,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private func closeSelection() {
         selectionMonitors.forEach { NSEvent.removeMonitor($0) }; selectionMonitors = []
         selectionPoll?.invalidate(); selectionPoll = nil
-        if !selectionWindows.isEmpty { NSCursor.pop() }
+        let hadSelection = !selectionWindows.isEmpty
         for window in selectionWindows { window.orderOut(nil); window.close() }
         selectionWindows.removeAll()
+        // The crosshair was set directly as well as pushed, so restore the arrow explicitly.
+        if hadSelection { NSCursor.pop(); NSCursor.arrow.set() }
     }
 
     func endDrawing() {
@@ -698,8 +701,8 @@ fileprivate final class RegionSelectionView: NSView {
         tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(tracking!); super.updateTrackingAreas()
     }
-    override func mouseEntered(with event: NSEvent) { state.moved(to: NSEvent.mouseLocation); window?.makeKey(); state.cursor.set() }
-    override func cursorUpdate(with event: NSEvent) { state.cursor.set() }
+    override func mouseEntered(with event: NSEvent) { guard window?.isVisible == true else { return }; state.moved(to: NSEvent.mouseLocation); window?.makeKey(); state.cursor.set() }
+    override func cursorUpdate(with event: NSEvent) { if window?.isVisible == true { state.cursor.set() } }
     override func resetCursorRects() { addCursorRect(bounds, cursor: state.cursor) }
     /// This display's frame in global coordinates; drawing converts global points into it.
     private var screenFrame: CGRect { window?.frame ?? .zero }
