@@ -26,7 +26,7 @@ struct HomeSnapshot:Equatable {
     var apps:[AppWords]=[]
     var topWords:[String]=[]
     /// The word cloud: the period's most-said nouns, each with the words said most often near it.
-    struct CloudWord:Hashable,Identifiable {let word:String;let count:Int;let related:[String];var id:String{word}}
+    struct CloudWord:Hashable,Identifiable {let word:String;let count:Int;let related:[String];var apps:[String]=[];var id:String{word}}
     var wordCloud:[CloudWord]=[]
     /// Typing at a fixed 40 words a minute, less the time spent speaking.
     var typingMinutesSaved:Int {max(0,Int((Double(words)/HomeStatsQuery.typingWordsPerMinute-speakingSeconds/60).rounded()))}
@@ -68,7 +68,7 @@ enum HomeStatsQuery {
         func mark(_ date:Date){s.heatmap[weekday(date)][calendar.component(.hour,from:date)]+=1}
 
         let display=correctionSpellings(db)
-        var counts:[String:Int]=[:],sequences:[[String]]=[],perApp:[String:Int]=[:],timedWords=0,timedSeconds=0.0
+        var counts:[String:Int]=[:],wordApps:[String:[String:Int]]=[:],sequences:[[String]]=[],perApp:[String:Int]=[:],timedWords=0,timedSeconds=0.0
         for row in try dictations(current) {
             let n=wordCount(row[1]),seconds=Double(row[3]) ?? 0
             s.words+=n;s.dictations+=1;s.speakingSeconds+=seconds;s.longestSeconds=max(s.longestSeconds,seconds)
@@ -76,7 +76,7 @@ enum HomeStatsQuery {
             perApp[row[2].isEmpty ? "Unknown":row[2],default:0]+=n
             if let date=local.date(from:row[0]) {mark(date)}
             let words=contentTokens(row[1]);sequences.append(words)
-            for word in words {counts[word,default:0]+=1}
+            for word in words {counts[word,default:0]+=1;if !row[2].isEmpty {wordApps[word,default:[:]][row[2],default:0]+=1}}
         }
         s.previousWords=try dictations(previous).reduce(0){$0+wordCount($1[1])}
         if timedSeconds>0 {s.wordsPerMinute=Int((Double(timedWords)/(timedSeconds/60)).rounded())}
@@ -85,7 +85,10 @@ enum HomeStatsQuery {
         let rest=ranked.dropFirst(5).reduce(0){$0+$1.value};if rest>0 {s.apps.append(.init(name:"Other",words:rest))}
         let top=counts.sorted{$0.value != $1.value ? $0.value>$1.value:$0.key<$1.key}.prefix(cloudSize)
         let related=neighbours(of:Set(top.map(\.key)),in:sequences)
-        s.wordCloud=top.map{HomeSnapshot.CloudWord(word:display[$0.key] ?? $0.key,count:$0.value,related:(related[$0.key] ?? []).map{display[$0] ?? $0})}
+        s.wordCloud=top.map{word in
+            let apps=(wordApps[word.key] ?? [:]).sorted{$0.value != $1.value ? $0.value>$1.value:$0.key<$1.key}.prefix(3).map(\.key)
+            return HomeSnapshot.CloudWord(word:display[word.key] ?? word.key,count:word.value,related:(related[word.key] ?? []).map{display[$0] ?? $0},apps:apps)
+        }
         s.topWords=s.wordCloud.prefix(8).map(\.word)
 
         let screenshotKinds:Set<String>=["capture_area","capture_full","capture_scroll"]
@@ -109,17 +112,21 @@ enum HomeStatsQuery {
         s.correctionsLearned=correctionsCreated(db,in:current)
         return s
     }
-    static let cloudSize=20
+    static let cloudSize=40
     /// Nouns only, found by the Mac's on-device language tagger, so filler such as "little",
     /// "whatever" or "doing" doesn't crowd out what you actually talk about.
     static func contentTokens(_ text:String)->[String] {
-        let tagger=NLTagger(tagSchemes:[.lexicalClass]);tagger.string=text
-        var nouns=Set<String>()
+        let tagger=NLTagger(tagSchemes:[.lexicalClass,.lemma]);tagger.string=text
+        var nouns:[String:String]=[:]   // word -> singular form, so "screenshots" counts as "screenshot"
         tagger.enumerateTags(in:text.startIndex..<text.endIndex,unit:.word,scheme:.lexicalClass,options:[.omitPunctuation,.omitWhitespace]){tag,range in
-            if tag == .noun {nouns.insert(text[range].lowercased().replacingOccurrences(of:"’",with:"'"))}
+            if tag == .noun {
+                let word=text[range].lowercased().replacingOccurrences(of:"’",with:"'")
+                let lemma=tagger.tag(at:range.lowerBound,unit:.word,scheme:.lemma).0?.rawValue.lowercased()
+                nouns[word]=(lemma?.count ?? 0)>=4 ? lemma:word
+            }
             return true
         }
-        return tokens(text).filter{nouns.contains($0)}
+        return tokens(text).compactMap{nouns[$0]}
     }
     /// For each word, the other nouns said within a few words of it most often (at least twice when there's enough data).
     static func neighbours(of words:Set<String>,in sequences:[[String]],window:Int=5,limit:Int=5)->[String:[String]] {

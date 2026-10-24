@@ -11,32 +11,56 @@ struct HomeDashboard: View {
     private let refresh = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-    /// Bigger words are said more. Click one to see the words you say near it.
-    @ViewBuilder private func wordCloud(_ words: [HomeSnapshot.CloudWord]) -> some View {
-        let most = Double(words.map(\.count).max() ?? 1)
-        // Alphabetical order mixes large and small words, as a cloud should.
-        FlowRow(words.sorted { $0.word.lowercased() < $1.word.lowercased() }) { item in
-            let weight = (Double(item.count) / most).squareRoot()
-            let selected = cloudWord == item.word
-            Button { cloudWord = selected ? nil : item.word } label: {
-                Text(item.word).font(.system(size: 11 + 13 * weight, weight: weight > 0.6 ? .semibold : .medium))
-                    .foregroundStyle(selected ? Color.accentColor : Color.primary.opacity(0.5 + 0.5 * weight))
-            }.buttonStyle(.plain).help("Said \(item.count.formatted()) times · click for words you say near it")
-        }
-        if let word = cloudWord, let item = words.first(where: { $0.word == word }) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(item.related.isEmpty ? "Nothing said near “\(word)” yet." : "Said near “\(word)”").font(.caption).foregroundStyle(.secondary)
-                if !item.related.isEmpty {
-                    FlowRow(item.related) { near in
-                        let inCloud = words.contains { $0.word == near }
-                        Button { if inCloud { cloudWord = near } } label: {
-                            Text(near).font(.caption.weight(.medium)).padding(.horizontal, 8).padding(.vertical, 4).background(.white.opacity(0.08), in: Capsule())
-                        }.buttonStyle(.plain).disabled(!inCloud)
-                    }
+    /// The word map: a large cloud on the left, details for the clicked word on the right.
+    @ViewBuilder private func wordMap(_ words: [HomeSnapshot.CloudWord]) -> some View {
+        // Size across the range from least to most said, so the map has real contrast.
+        let most = Double(words.map(\.count).max() ?? 1), least = Double(words.map(\.count).min() ?? 0)
+        let ranked = Dictionary(uniqueKeysWithValues: words.enumerated().map { ($1.word, $0) })
+        HStack(alignment: .top, spacing: 20) {
+            // Alphabetical order mixes large and small words, as a cloud should.
+            FlowLayout(spacing: 12) {
+                ForEach(words.sorted { $0.word.lowercased() < $1.word.lowercased() }) { item in
+                    let weight = most > least ? ((Double(item.count) - least) / (most - least)).squareRoot() : 1, rank = ranked[item.word] ?? 99
+                    let selected = cloudWord == item.word
+                    let colour: Color = selected ? .accentColor : rank < 3 ? .cyan : rank < 6 ? .blue : Color.primary.opacity(0.45 + 0.55 * weight)
+                    Button { withAnimation(.easeOut(duration: 0.15)) { cloudWord = selected ? nil : item.word } } label: {
+                        Text(item.word).font(.system(size: 13 + 31 * weight, weight: weight > 0.55 ? .bold : weight > 0.3 ? .semibold : .medium))
+                            .foregroundStyle(colour)
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(selected ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                    }.buttonStyle(.plain).help("Said \(item.count.formatted()) times")
                 }
-            }.padding(.top, 4)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            wordDetail(words).frame(width: 230, alignment: .topLeading)
         }
     }
+    @ViewBuilder private func wordDetail(_ words: [HomeSnapshot.CloudWord]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let word = cloudWord, let item = words.first(where: { $0.word == word }) {
+                Text(item.word).font(.title2.weight(.semibold))
+                Text("Said \(item.count.formatted()) time\(item.count == 1 ? "" : "s") \(periodPhrase.lowercased())").font(.callout).foregroundStyle(.secondary)
+                if !item.apps.isEmpty {
+                    Text("Mostly in").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+                    Text(item.apps.joined(separator: " · ")).font(.callout)
+                }
+                Text(item.related.isEmpty ? "Nothing said near it yet." : "Said near it").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+                if !item.related.isEmpty {
+                    FlowRow(item.related) { near in
+                        let inMap = words.contains { $0.word == near }
+                        Button { if inMap { withAnimation(.easeOut(duration: 0.15)) { cloudWord = near } } } label: {
+                            Text(near).font(.caption.weight(.medium)).padding(.horizontal, 8).padding(.vertical, 4).background(.white.opacity(0.08), in: Capsule())
+                        }.buttonStyle(.plain).disabled(!inMap)
+                    }
+                }
+            } else {
+                Image(systemName: "hand.tap").font(.title2).foregroundStyle(.secondary)
+                Text("Click a word to see how often you say it, which apps you say it in, and the words you say with it.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+    }
+
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -98,11 +122,11 @@ struct HomeDashboard: View {
                 }
             }
         }.fixedSize(horizontal: false, vertical: true)
+        ToolCard(title: "Words you say most", subtitle: s.wordCloud.isEmpty ? "" : "Bigger words are said more. Click one to see where you say it and what you say with it.") {
+            if s.wordCloud.isEmpty { Text("Not enough dictation yet.").foregroundStyle(.secondary) }
+            else { wordMap(s.wordCloud) }
+        }
         HStack(alignment: .top, spacing: 12) {
-            ToolCard(title: "Words you say most", subtitle: "") {
-                if s.wordCloud.isEmpty { Text("Not enough dictation yet.").foregroundStyle(.secondary) }
-                else { wordCloud(s.wordCloud) }
-            }
             ToolCard(title: "Dictation habits", subtitle: "") {
                 fact("Dictations", s.dictations.formatted())
                 fact("Speaking speed", s.wordsPerMinute.map { "\($0) wpm" } ?? "—")
