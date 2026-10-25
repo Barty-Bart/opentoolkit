@@ -707,6 +707,20 @@ class VoiceTests(unittest.TestCase):
         d.db.commit.assert_called_once(); env["paste"].assert_not_called()
         self.assertEqual(self.emissions[-1][0], 'error')
 
+    def test_unlock_resumes_wake_listening_that_lock_paused(self):
+        self.c.stop_long = Mock(); self.c.paused_file = self.base / 'disabled'
+        self.c.config['wakeEnabled'] = True; self.c.enabled = True
+        self.c.pause_for_lock()
+        self.assertFalse(self.c.enabled); self.assertTrue(self.c.paused_file.exists())
+        self.c.resume_after_lock()
+        self.assertTrue(self.c.enabled); self.assertFalse(self.c.paused_file.exists())
+
+    def test_unlock_keeps_a_pause_the_user_chose(self):
+        self.c.stop_long = Mock(); self.c.paused_file = self.base / 'disabled'
+        self.c.config['wakeEnabled'] = True; self.c.enabled = False; self.c.paused_file.touch()
+        self.c.pause_for_lock(); self.c.resume_after_lock()
+        self.assertFalse(self.c.enabled); self.assertTrue(self.c.paused_file.exists())
+
     def test_recovery_copy_failure_still_saves_transcript(self):
         cls, env = dictation_class()
         d = cls.__new__(cls); d.voice_control = self.c; d.transcriber = Mock()

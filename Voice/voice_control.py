@@ -305,7 +305,7 @@ class VoiceControl:
         self.preview_pending=False;self.last_preview=0.;self.queue=queue.Queue(maxsize=40)
         self.status='Speech worker ready';self.locked=False;self.last_command=0.;self.session=''
         self.segment=[];self.segment_frames=0;self.silent=0;self.segment_pending=0;self.segment_lock=threading.RLock();self.send_generation=0
-        self.paused_file=speech_data()/'voice-commands.disabled'
+        self.paused_file=speech_data()/'voice-commands.disabled';self.paused_by_lock=False
         from command_session import CommandSession
         self.command_session=CommandSession()
         self.writing_override=None
@@ -313,6 +313,7 @@ class VoiceControl:
         self.timer=NSTimer.scheduledTimerWithTimeInterval_repeats_block_(.3,True,lambda t:self.tick())
         center=NSDistributedNotificationCenter.defaultCenter()
         self._lock_observer=center.addObserverForName_object_queue_usingBlock_('com.apple.screenIsLocked',None,None,lambda n:AppHelper.callAfter(self.pause_for_lock))
+        self._unlock_observer=center.addObserverForName_object_queue_usingBlock_('com.apple.screenIsUnlocked',None,None,lambda n:AppHelper.callAfter(self.resume_after_lock))
         threading.Thread(target=self._microphone,daemon=True).start()
         threading.Thread(target=self._detect,daemon=True).start()
         self.emit('ready')
@@ -465,7 +466,15 @@ class VoiceControl:
             self.send_after=False;self.d.start(voice=True,target=target)
             self.emit('capture_started',mode=self.capture_mode)
     def pause_for_lock(self):
-        self.enabled=False;self.paused_file.touch();self.stop_long();self.d.stop(deliver=False);self.epoch+=1;self.label('Paused when screen locked — enable wake phrases to resume')
+        # Never listen while the screen is locked. Remember whether wake listening was on,
+        # so unlocking turns it back on; a pause the user chose stays paused.
+        self.paused_by_lock=getattr(self,'paused_by_lock',False) or self.enabled
+        self.enabled=False;self.paused_file.touch();self.stop_long();self.d.stop(deliver=False);self.epoch+=1;self.label('Paused while the screen is locked')
+    def resume_after_lock(self):
+        if not getattr(self,'paused_by_lock',False):return
+        self.paused_by_lock=False
+        if not self.config.get('wakeEnabled',False):return
+        self.paused_file.unlink(missing_ok=True);self.enabled=True;self.epoch+=1;self.label()
     def _audio(self,data,frames,clock,status):
         samples=data[:,0].copy();rms=float(np.sqrt(np.mean(samples*samples)))
         with self.d.audio_lock:
