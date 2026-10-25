@@ -22,7 +22,7 @@ Local dictation, screenshots, screen drawing and recording in one free Mac app. 
 | **Screenshot editor** | A real canvas you can resize, a second image as its own layer, pinch to zoom. Arrows, shapes, text, numbered steps, redaction and a highlighter that snaps onto words. |
 | **Screen drawing** | **⌥⌘D** to draw over your screen. Press it again to stop, or hold it to draw only while it's held. Marks stay until you clear them. |
 | **Screen recording** | Record a region as video or GIF. Optionally show a larger cursor, a highlight ring and click ripples. |
-| **Home** | Words dictated, typing time saved, captures, recordings, when you work and the words you say most. Counted on your Mac; you can turn it off. |
+| **Home** | Words dictated, typing time saved, captures, recordings and when you work. "Your words" shows up to 40 words you say most, for all apps or one. Click a word for uses per day and your latest dictations with it, with Copy and Show in history. Counted on your Mac; you can turn it off. |
 | **Word corrections** | Review suggested corrections after editing a dictation. Save a replacement, undo it, or disable it in Corrections. Support depends on the target text box. |
 | **Writing modes** | Tidy spacing and format messages. Optional: bullet summaries and email drafts with a local AI model you run yourself, such as one in LM Studio. |
 | **Notes · experimental** | Optional local notes, folders, keyword search and meeting transcripts. Off by default. |
@@ -38,7 +38,7 @@ Local dictation, screenshots, screen drawing and recording in one free Mac app. 
 <td width="50%"><img src="docs/images/editor.jpg" alt="The screenshot editor with numbered steps, a highlighted link and a redacted email address"><br><sub>The editor: steps, highlight, redaction, arrows.</sub></td>
 </tr>
 <tr>
-<td colspan="2"><img src="docs/images/home.jpg" alt="The Home page with weekly totals, an activity heatmap, words by app and a word cloud"><br><sub><b>Home</b>: your week, counted on your Mac.</sub></td>
+<td colspan="2"><img src="docs/images/home.jpg" alt="The Home page with weekly totals, an activity heatmap, words by app and Your words with one word selected"><br><sub><b>Home</b>: your week, counted on your Mac. Click a word to see where you said it.</sub></td>
 </tr>
 </table>
 
