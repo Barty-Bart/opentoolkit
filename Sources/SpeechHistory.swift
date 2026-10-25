@@ -7,7 +7,8 @@ struct SpeechEntry:Identifiable {let id:Int64;let date:String;let text:String;le
     @Published var status=""
     @Published var dictionary=""
     private let support=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pico/Speech")
-    func refresh(){var db:OpaquePointer?;guard sqlite3_open_v2(LibraryDatabase.url.path,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_FULLMUTEX,nil)==SQLITE_OK else{if db != nil {sqlite3_close(db)};status="History will appear after the first dictation.";return};defer{sqlite3_close(db)};sqlite3_busy_timeout(db,500);var stmt:OpaquePointer?;guard sqlite3_prepare_v2(db,"SELECT id,created_at,text,COALESCE(app,'') FROM dictations ORDER BY id DESC LIMIT 100",-1,&stmt,nil)==SQLITE_OK else{status="Could not read history";return};defer{sqlite3_finalize(stmt)};var result:[SpeechEntry]=[];while sqlite3_step(stmt)==SQLITE_ROW{func string(_ col:Int32)->String{guard let bytes=sqlite3_column_text(stmt,col) else{return ""};return String(cString:bytes)};result.append(SpeechEntry(id:sqlite3_column_int64(stmt,0),date:string(1),text:string(2),app:string(3)))};entries=result;status="Showing the most recent \(result.count) saved transcriptions";dictionary=(try? LibraryDatabase().legacyValue("manual_replacements",file:support.appendingPathComponent("replacements.txt"),fallback:"")) ?? ""}
+    func refresh(containing word:String?=nil){var db:OpaquePointer?;guard sqlite3_open_v2(LibraryDatabase.url.path,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_FULLMUTEX,nil)==SQLITE_OK else{if db != nil {sqlite3_close(db)};status="History will appear after the first dictation.";return};defer{sqlite3_close(db)};sqlite3_busy_timeout(db,500);var stmt:OpaquePointer?;guard sqlite3_prepare_v2(db,word==nil ? "SELECT id,created_at,text,COALESCE(app,'') FROM dictations ORDER BY id DESC LIMIT 100":"SELECT id,created_at,text,COALESCE(app,'') FROM dictations WHERE text LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT 100",-1,&stmt,nil)==SQLITE_OK else{status="Could not read history";return};defer{sqlite3_finalize(stmt)}
+if let word {let pattern="%"+word.replacingOccurrences(of:"\\",with:"\\\\").replacingOccurrences(of:"%",with:"\\%").replacingOccurrences(of:"_",with:"\\_")+"%";sqlite3_bind_text(stmt,1,pattern,-1,unsafeBitCast(-1,to:sqlite3_destructor_type.self))};var result:[SpeechEntry]=[];while sqlite3_step(stmt)==SQLITE_ROW{func string(_ col:Int32)->String{guard let bytes=sqlite3_column_text(stmt,col) else{return ""};return String(cString:bytes)};result.append(SpeechEntry(id:sqlite3_column_int64(stmt,0),date:string(1),text:string(2),app:string(3)))};entries=result;status=word.map{"Showing the most recent \(result.count) transcriptions containing “\($0)”"} ?? "Showing the most recent \(result.count) saved transcriptions";dictionary=(try? LibraryDatabase().legacyValue("manual_replacements",file:support.appendingPathComponent("replacements.txt"),fallback:"")) ?? ""}
     func saveDictionary(){let lines=dictionary.components(separatedBy:.newlines);guard lines.allSatisfy({$0.trimmingCharacters(in:.whitespaces).isEmpty || $0.trimmingCharacters(in:.whitespaces).hasPrefix("#") || $0.contains("=>")}) else{status="Use one rule per line: heard word => correct word";return};do{try LibraryDatabase().set("manual_replacements",dictionary);status="Word corrections saved. Applied to future transcriptions."}catch{status=error.localizedDescription}}
 }
 struct ManualCorrectionsView:View {
@@ -36,13 +37,16 @@ struct ManualCorrectionsView:View {
 struct SpeechHistoryView:View {
     @ObservedObject var voice:VoiceBridge
     var correctionsOnly=false
+    /// Only transcripts containing this word, with a way back to everything.
+    var filter:String?=nil
+    var clearFilter:(()->Void)?=nil
     var saveAsNote:((String)->Void)?=nil
     @StateObject private var history=SpeechHistory()
     var body:some View{VStack(alignment:.leading,spacing:18){
         if correctionsOnly {CorrectionsView(voice:voice);ManualCorrectionsView(history:history);Text(history.status).font(.caption).foregroundStyle(.secondary)}
         else {
-            ToolCard(title:"Saved transcriptions",subtitle:history.status){Button("Refresh"){history.refresh()}}
+            ToolCard(title:"Saved transcriptions",subtitle:history.status){HStack{Button("Refresh"){history.refresh(containing:filter)};if let filter {Button("Show all, not just “\(filter)”"){clearFilter?()}}}}
             ForEach(history.entries){entry in ToolCard(title:entry.date,subtitle:entry.app){Text(entry.text).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading);Button("Copy"){NSPasteboard.general.clearContents();NSPasteboard.general.setString(entry.text,forType:.string)};if let saveAsNote {Button("Save a copy to Notes"){saveAsNote(entry.text)}}}}
         }
-    }.onAppear{history.refresh()}}
+    }.onAppear{history.refresh(containing:filter)}.onChange(of:filter){value in history.refresh(containing:value)}}
 }

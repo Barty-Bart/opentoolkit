@@ -87,6 +87,32 @@ import Foundation
         check(month.dictations==9 && month.period.start==at(2026,10,1,0),"Month covers October")
         check(HomeStatsQuery.wordCount("  a\tb\nc  ")==3 && HomeStatsQuery.tokens("Don’t ship it's notarization!")==["ship","notarization"],"Word counting and tokens")
 
+        // "Your words": cap, ordering, change vs last week, app filter, hidden words, latest uses.
+        let words=try fresh("words")
+        for n in 0..<45 { for _ in 0...(n % 5) { try dictation(words,"2026-10-20 09:\(String(format:"%02d",n)):00","The topic\(String(UnicodeScalar(97+n%26)!))\(String(UnicodeScalar(97+n/26)!)) review","Notes",2) } }
+        try dictation(words,"2026-10-20 10:00:00","The release is ready and the release notes too","Slack",3)
+        try dictation(words,"2026-10-21 11:00:00","Another release for the website","Mail",3)
+        try dictation(words,"2026-10-13 10:00:00","Last week's release","Slack",3)      // previous span, before Thursday 15:00
+        try dictation(words,"2026-10-21 09:30:00","The release in a meeting segment","meeting",30)
+        let cloud=try HomeStatsQuery.load(db:words,period:.week,now:now,calendar:calendar)
+        check(cloud.wordCloud.count==HomeStatsQuery.cloudSize,"Cloud is capped at 40 words: \(cloud.wordCloud.count)")
+        check(zip(cloud.wordCloud,cloud.wordCloud.dropFirst()).allSatisfy{$0.count>=$1.count},"Cloud is ordered by count")
+        let release=try HomeStatsQuery.load(db:words,period:.week,now:now,calendar:calendar,hidden:["review"]).wordCloud.first{$0.key=="release"}
+        check(release?.count==3 && release?.previousCount==1 && release?.change==2,"Release said 3 times, once last week: \(String(describing:release))")
+        check(release?.daily.count==7 && release?.daily[1]==2 && release?.daily[2]==1,"Daily uses Monday to Sunday (Tue 2, Wed 1): \(release?.daily ?? [])")
+        let slackOnly=try HomeStatsQuery.load(db:words,period:.week,now:now,calendar:calendar,wordsApp:"Slack")
+        check(slackOnly.wordCloud.map(\.key).contains("release") && !slackOnly.wordCloud.map(\.key).contains("website") && slackOnly.wordsApp=="Slack","App filter counts only that app's words")
+        check(slackOnly.words==cloud.words,"The app filter changes only the cloud, not the totals")
+        let hidden=try HomeStatsQuery.load(db:words,period:.week,now:now,calendar:calendar,hidden:["release"])
+        check(!hidden.wordCloud.map(\.key).contains("release"),"Hidden words leave the cloud")
+        let latest=try HomeStatsQuery.dictations(db:words,containing:"release",in:cloud.period,calendar:calendar)
+        check(latest.map(\.app)==["Mail","Slack"],"Latest uses, newest first, never meeting segments or last week: \(latest.map(\.app))")
+        check(latest.first.map{String($0.snippet[$0.highlight!])}=="release","The snippet marks the word itself")
+        let long=String(repeating:"word ",count:40)+"the Releases went out "+String(repeating:"more ",count:40)
+        let (cut,mark)=HomeStatsQuery.snippet(long,around:"releas")
+        check(cut.count<=122 && cut.hasPrefix("…") && cut.hasSuffix("…") && mark.map{String(cut[$0])}=="Releases","Long text is cut around the word, and the whole word is marked: \(cut)")
+        check(HomeStatsQuery.snippet("Prerelease only",around:"releas").1==nil,"Matches only at the start of a word")
+
         // An empty library is an empty summary, not an error.
         let empty=try HomeStatsQuery.load(db:try fresh("empty"),period:.week,now:now,calendar:calendar)
         check(empty.isEmpty && empty.busiest==nil && empty.apps.isEmpty && empty.topWords.isEmpty && empty.correctionsLearned==0,"Empty library")

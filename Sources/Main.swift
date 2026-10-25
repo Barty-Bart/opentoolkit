@@ -15,6 +15,8 @@ enum ToolPage: String, CaseIterable, Identifiable {
 @MainActor final class AppModel: ObservableObject {
     @Published var recoveryID = UUID()
     @Published var page:ToolPage = .home
+    /// Dictation › History shows only transcripts containing this word (set from Home's Your words).
+    @Published var historyFilter:String?
     @Published var captureSection="Capture"
     @Published var settingsSection:SettingsSection = .general
     @Published var notice="Everything stays on this Mac."
@@ -146,7 +148,7 @@ enum ToolPage: String, CaseIterable, Identifiable {
         case "recording":guard enabled("recording") else{return};if recording.isRecording {recording.stop()}else{capture.cancel();recording.selectRegion(fixedSize:size){[weak self] region in guard let self,let region else{return};self.gifRecording=nil;self.recording.start(region:region,includeMicrophone:self.includeMic)}}
         case "notes":guard enabled("organizer") else{return};page = .organizer;showWindow?()
         case "reminders":guard enabled("organizer") else{return};page = .organizer;showWindow?();organizer.presentReminderComposer()
-        case "recover":recoveryID = UUID();page = .history;showWindow?();notice="Latest saved transcription is at the top. Click Copy to recover it."
+        case "recover":recoveryID = UUID();historyFilter=nil;page = .history;showWindow?();notice="Latest saved transcription is at the top. Click Copy to recover it."
         case "voice":if voice.state.recording {voice.command("stop")}else{voice.command("start")}
         default:break
         }
@@ -326,7 +328,7 @@ struct RootView:View {
                     Text("History").tag(ToolPage.history);Text("Corrections").tag(ToolPage.corrections)
                 }.pickerStyle(.segmented).labelsHidden().frame(width:280)
                 if model.page == .corrections {SpeechHistoryView(voice:model.voice,correctionsOnly:true)}
-                else {SpeechHistoryView(voice:model.voice,saveAsNote:{text in model.organizer.addNote(text);model.notice="Saved a copy in Notes."})}
+                else {SpeechHistoryView(voice:model.voice,filter:model.historyFilter,clearFilter:{model.historyFilter=nil},saveAsNote:{text in model.organizer.addNote(text);model.notice="Saved a copy in Notes."})}
             }
         case .capture:
             VStack(alignment:.leading,spacing:18) {
@@ -388,7 +390,7 @@ struct RootView:View {
                 }
                 ToolCard(title:"Cursor in recordings",subtitle:"Make the pointer easy to follow in videos and GIFs."){CursorEffectsSettings()}
             case .drawing:AnnotationSettings(model:model)
-            case .dictation:VoiceView(voice:model.voice);DictationModesView(voice:model.voice);VoiceFeedbackSettings(voice:model.voice)
+            case .dictation:VoiceView(voice:model.voice);DictationModesView(voice:model.voice);VoiceFeedbackSettings(voice:model.voice);ToolCard(title:"Your words on Home",subtitle:"Words you hide from the Home word cloud with right-click stay hidden until you show them again here."){HiddenWordsSettings()}
             case .permissions:PermissionsView(voice:model.voice)
             case .advanced:
                 ToolCard(title:"Advanced",subtitle:"Your library, settings and recordings stay in this folder on your Mac."){
@@ -606,7 +608,7 @@ struct ContinuousView:View {
         case "mode:gif":model.startCaptureMode("gif")
         case "clearDrawing":model.capture.clearAnnotations()
         case "page:screenshotHistory":model.capture.showRecentHistory()
-        case "page:dictationHistory":model.page = .history;show()
+        case "page:dictationHistory":model.historyFilter=nil;model.page = .history;show()
         case "page:voice":model.settingsSection = .dictation;model.page = .settings;show()
         default:model.perform(action)
         }
