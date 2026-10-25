@@ -259,31 +259,27 @@ enum SettingsSection:String,CaseIterable,Identifiable {
     case update="Software Update",general="General",shortcuts="Shortcuts",screenshots="Screenshots",recording="Recording",drawing="Draw on Screen",dictation="Dictation",permissions="Permissions",advanced="Advanced"
     var id:String{rawValue}
     var symbol:String {switch self {case .update:return "arrow.down.circle";case .general:return "gearshape";case .shortcuts:return "keyboard";case .screenshots:return "viewfinder";case .recording:return "record.circle";case .drawing:return "pencil.tip.crop.circle";case .dictation:return "waveform";case .permissions:return "hand.raised";case .advanced:return "wrench.and.screwdriver"}}
-    static let groups:[(String,[SettingsSection])]=[("",[.update,.general,.shortcuts]),("Tools",[.screenshots,.recording,.drawing,.dictation]),("System",[.permissions,.advanced])]
+    // Recording and drawing options live on their own sidebar pages; dictation controls on the Dictation page.
+    static let groups:[(String,[SettingsSection])]=[("",[.update,.general,.shortcuts]),("Tools",[.screenshots,.dictation]),("System",[.permissions,.advanced])]
 }
 
 struct RootView:View {
     @ObservedObject var model:AppModel
-    /// Simplified sidebar: Home, Screenshots, Dictation, Notes (when on); Settings pinned at the bottom.
-    private var pages:[ToolPage] {
-        var list:[ToolPage]=[.home]
-        if model.enabled("screenshots") || model.enabled("recording") {list.append(.capture)}
-        if model.voice.settings.dictationEnabled {list.append(.voice)}
-        if model.enabled("organizer") {list.append(.organizer)}
+    /// Sidebar groups: Home, then Speak, Capture and Draw (rows hide with their tool), Notes when on; Settings pinned at the bottom.
+    private var groups:[(String,[ToolPage])] {
+        var list:[(String,[ToolPage])]=[("",[.home])]
+        if model.voice.settings.dictationEnabled {list.append(("Speak",[.voice,.history,.corrections]))}
+        let capture=(model.enabled("screenshots") ? [ToolPage.capture]:[])+(model.enabled("recording") ? [.recording]:[])
+        if !capture.isEmpty {list.append(("Capture",capture))}
+        if model.enabled("drawing") {list.append(("Draw",[.drawing]))}
+        if model.enabled("organizer") {list.append(("",[.organizer]))}
         return list
     }
-    /// The sidebar row that owns the current page, so sub-pages keep their row highlighted.
-    private var current:ToolPage {
-        switch model.page {
-        case .voice,.history,.corrections:return .voice
-        case .recording:return .capture
-        case .drawing,.continuous:return .settings
-        default:return model.page
-        }
-    }
-    private func title(_ page:ToolPage)->String {page == .capture ? "Screenshots":page == .voice ? "Dictation":page.rawValue}
+    /// The sidebar row that owns the current page; every row is its own page now.
+    private var current:ToolPage {model.page == .continuous ? .organizer:model.page}
+    private func title(_ page:ToolPage)->String {page.rawValue}
     private func row(_ page:ToolPage)->some View {
-        Button{model.page = page == .voice ? .history:page} label:{
+        Button{model.page = page} label:{
             HStack(spacing:11) {
                 Image(systemName:page.symbol).foregroundStyle(page.color == .secondary ? Color.gray:page.color).frame(width:22)
                 Text(title(page));Spacer(minLength:0)
@@ -297,7 +293,12 @@ struct RootView:View {
         HStack(spacing:0) {
             // Glass sidebar card with the coloured tool icons; Settings pinned to the bottom.
             VStack(alignment:.leading,spacing:4) {
-                ForEach(pages) {page in row(page)}
+                ForEach(groups,id:\.1) {group in
+                    if !group.0.isEmpty {
+                        Text(group.0).font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal,10).padding(.top,12).padding(.bottom,2)
+                    }
+                    ForEach(group.1) {page in row(page)}
+                }
                 Spacer()
                 row(.settings)
             }
@@ -322,24 +323,28 @@ struct RootView:View {
     @ViewBuilder var content:some View {
         switch current {
         case .home:HomeDashboard(model:model)
-        case .voice:
+        case .voice:VoiceView(voice:model.voice)
+        case .history:SpeechHistoryView(voice:model.voice,filter:model.historyFilter,clearFilter:{model.historyFilter=nil},saveAsNote:{text in model.organizer.addNote(text);model.notice="Saved a copy in Notes."})
+        case .corrections:SpeechHistoryView(voice:model.voice,correctionsOnly:true)
+        case .recording:
             VStack(spacing:18) {
-                Picker("Dictation section",selection:Binding(get:{model.page == .corrections ? ToolPage.corrections:ToolPage.history},set:{model.page=$0})) {
-                    Text("History").tag(ToolPage.history);Text("Corrections").tag(ToolPage.corrections)
-                }.pickerStyle(.segmented).labelsHidden().frame(width:280)
-                if model.page == .corrections {SpeechHistoryView(voice:model.voice,correctionsOnly:true)}
-                else {SpeechHistoryView(voice:model.voice,filter:model.historyFilter,clearFilter:{model.historyFilter=nil},saveAsNote:{text in model.organizer.addNote(text);model.notice="Saved a copy in Notes."})}
+                ToolCard(title:"Screen recording",subtitle:"System audio is included; microphone audio is optional."){
+                    Toggle("Include microphone",isOn:$model.includeMic);frameControls
+                    RecordingControls(recording:model.recording,begin:{model.perform("recording")})
+                    Button("Open recordings folder"){NSWorkspace.shared.open(storageRoot.appendingPathComponent("Recordings"))}
+                }
+                ToolCard(title:"Cursor in recordings",subtitle:"Make the pointer easy to follow in videos and GIFs."){CursorEffectsSettings()}
             }
+        case .drawing:AnnotationSettings(model:model)
         case .capture:
             VStack(alignment:.leading,spacing:18) {
                 HStack {
                     Spacer()
-                    Button("Open recordings folder"){NSWorkspace.shared.open(storageRoot.appendingPathComponent("Recordings"))}
                     Button("Screenshot settings…"){model.settingsSection = .screenshots;model.page = .settings}
                 }
                 CaptureHistoryView(capture:model.capture)
             }
-        case .organizer:
+        case .organizer,.continuous:
             if model.enabled("organizer") {NotesLibraryView(model:model)}
             else {ToolCard(title:"Notes · experimental",subtitle:"Local notes and keyword search."){Button("Turn on Notes"){model.toggle("organizer",true)}}}
         default:EmptyView()
@@ -383,14 +388,10 @@ struct RootView:View {
                     Button("Open the capture bar (⇧⌘5)"){model.showCaptureOptions()}
                 }
                 CaptureRetentionView(capture:model.capture)
-            case .recording:
-                ToolCard(title:"Screen recording",subtitle:"System audio is included; microphone audio is optional."){
-                    Toggle("Include microphone",isOn:$model.includeMic);frameControls
-                    RecordingControls(recording:model.recording,begin:{model.perform("recording")})
-                }
-                ToolCard(title:"Cursor in recordings",subtitle:"Make the pointer easy to follow in videos and GIFs."){CursorEffectsSettings()}
-            case .drawing:AnnotationSettings(model:model)
-            case .dictation:VoiceView(voice:model.voice);DictationModesView(voice:model.voice);VoiceFeedbackSettings(voice:model.voice);ToolCard(title:"Your words on Home",subtitle:"Words you hide from the Home word cloud with right-click stay hidden until you show them again here."){HiddenWordsSettings()}
+            // Older links to these sections land on the pages that now hold them.
+            case .recording:Button("Recording options are on the Recording page"){model.page = .recording}
+            case .drawing:Button("Drawing options are on the Annotation page"){model.page = .drawing}
+            case .dictation:DictationModesView(voice:model.voice);VoiceFeedbackSettings(voice:model.voice);ToolCard(title:"Your words on Home",subtitle:"Words you hide from the Home word cloud with right-click stay hidden until you show them again here."){HiddenWordsSettings()}
             case .permissions:PermissionsView(voice:model.voice)
             case .advanced:
                 ToolCard(title:"Advanced",subtitle:"Your library, settings and recordings stay in this folder on your Mac."){
@@ -609,7 +610,7 @@ struct ContinuousView:View {
         case "clearDrawing":model.capture.clearAnnotations()
         case "page:screenshotHistory":model.capture.showRecentHistory()
         case "page:dictationHistory":model.historyFilter=nil;model.page = .history;show()
-        case "page:voice":model.settingsSection = .dictation;model.page = .settings;show()
+        case "page:voice":model.page = .voice;show()
         default:model.perform(action)
         }
     }
