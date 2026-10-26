@@ -14,7 +14,7 @@ Local dictation, screenshots, screen drawing and recording in one free Mac app. 
 
 | | |
 | --- | --- |
-| **Dictation** | Hold **Fn** and speak into the text box you're in. Speech is transcribed on your Mac with Parakeet or Whisper. Switch to AirPods or a headset and it picks up the new microphone by itself. |
+| **Dictation** | Hold **Fn** and speak into the text box you're in, or double-tap **Fn** to talk hands-free and double-tap again to stop. Speech is transcribed on your Mac with Parakeet or Whisper. Switch to AirPods or a headset and it picks up the new microphone by itself. |
 | **Dictation history** | **Double-tap Shift** to paste your last transcript again. **Triple-tap** to open everything you've dictated. The key is customisable. |
 | **Hey Toolkit** | Say the wake phrase, wait for the cue, then a command: start dictating, take a screenshot, draw on screen, record my screen. A glow around the pointer shows it's listening. Optional and off until you turn it on. |
 | **Screenshots** | **⇧⌘4** for an area, on any display. Thumbnails stack in the corner of the display you're on; drag one into another app, or double-click to edit. |
