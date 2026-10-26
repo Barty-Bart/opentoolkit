@@ -9,6 +9,7 @@ import json
 import logging
 from pathlib import Path
 import queue
+import re
 import sqlite3
 import sys
 import tempfile
@@ -25,6 +26,16 @@ import voice_control as v
 import wake_engine as w
 
 
+def filler_function():
+    """The real is_filler_only from dictate.py, without importing the GPU or UI modules."""
+    source = ast.parse((ROOT / "Voice" / "dictate.py").read_text())
+    keep = [n for n in source.body if (isinstance(n, ast.FunctionDef) and n.name == "is_filler_only")
+            or (isinstance(n, ast.Assign) and any(getattr(t, "id", "") in ("FILLER_WORDS", "FILLER_MAX_SECONDS") for t in n.targets))]
+    env = {"re": re}
+    exec(compile(ast.Module(body=keep, type_ignores=[]), "dictate.py filler", "exec"), env)
+    return env["is_filler_only"]
+
+
 def dictation_class():
     """Load only the real class methods, without importing/initialising GPU or UI."""
     source = ast.parse((ROOT / "Voice" / "dictate.py").read_text())
@@ -33,7 +44,8 @@ def dictation_class():
                AppHelper=types.SimpleNamespace(callAfter=lambda f, *args: f(*args)),
                SAMPLE_RATE=16000, MIN_AUDIO_SECONDS=.35, TAP_SECONDS=.3,
                START_SOUND="start", STOP_SOUND="stop", play=Mock(), frontmost_app=Mock(return_value="Test"),
-               apply_replacements=lambda text: text, AXIsProcessTrustedWithOptions=Mock(return_value=True), paste=Mock())
+               apply_replacements=lambda text: text, AXIsProcessTrustedWithOptions=Mock(return_value=True), paste=Mock(),
+               is_filler_only=filler_function())
     exec(compile(ast.Module(body=[cls], type_ignores=[]), "dictate.py isolated class", "exec"), env)
     directory = tempfile.TemporaryDirectory(prefix="opentoolkit-voice-test-")
     env["_recovery_directory"] = directory
@@ -1022,6 +1034,26 @@ class MicrophoneRecoveryTests(unittest.TestCase):
         self.assertNotIn("self.enabled=False", body)
         self.assertIn("retry_at", body)
         self.assertIn("not stream.active", body)
+
+
+class FillerTests(unittest.TestCase):
+    """Short murmurs from an accidental Fn tap are kept in history but never pasted."""
+    def test_short_filler_is_not_pasted(self):
+        filler = filler_function()
+        for text in ["Okay.", "Mm-hmm.", "Yeah.", "Thank you.", "Uh, okay."]:
+            self.assertTrue(filler(text, 1.2), text)
+
+    def test_real_dictation_is_pasted(self):
+        filler = filler_function()
+        self.assertFalse(filler("Okay, send the invoice.", 2.0))
+        self.assertFalse(filler("Okay.", 6.0))           # a long recording is deliberate
+        self.assertFalse(filler("Testing, testing.", 1.5))
+        self.assertFalse(filler("", 1.0))
+
+    def test_delivery_checks_filler_before_pasting(self):
+        source = (ROOT / "Voice" / "dictate.py").read_text()
+        deliver = source[source.index("def deliver():"):]
+        self.assertLess(deliver.index("is_filler_only(text, secs)"), deliver.index("AXIsProcessTrustedWithOptions"))
 
 
 class EarlyStatusTests(unittest.TestCase):

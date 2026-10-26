@@ -791,6 +791,11 @@ class Dictation:
             if not context.get('deliver', True):
                 self.voice_control.delivery_status('Dictation stopped while paused or locked. The transcript is saved in history; nothing was pasted.', True)
                 return
+            if is_filler_only(text, secs):
+                # An accidental Fn tap or a murmur ("Okay.", "Mm-hmm.") must not land mid-sentence.
+                log.info("delivery: short filler-only transcript kept in history, not pasted")
+                self.voice_control.delivery_status(f'Only heard “{text.strip()}”, so it wasn\'t pasted. Double-tap Shift if you meant it.', True)
+                return
             if (context.get('delivery_generation', getattr(self, 'delivery_generation', 0)) != getattr(self, 'delivery_generation', 0)
                     or getattr(self, 'recording', False)):
                 self.voice_control.delivery_status('A new dictation started; the earlier transcript is saved in history.', True)
@@ -940,6 +945,17 @@ def make_tap(dictation):
 
 
 # --- permissions ----------------------------------------------------------
+
+# Words that, alone in a short recording, are a murmur or an accidental Fn tap rather than dictation.
+FILLER_WORDS = {'ok', 'okay', 'yeah', 'yes', 'yep', 'no', 'mm', 'mmm', 'hmm', 'mm-hmm', 'mhm', 'uh', 'um', 'uh-huh', 'ah', 'oh', 'so', 'right', 'thanks', 'thank', 'you', 'bye', 'cool', 'nice', 'alright'}
+FILLER_MAX_SECONDS = 4.0
+
+
+def is_filler_only(text, seconds):
+    """True for a short recording whose transcript is only filler (e.g. "Okay.", "Mm-hmm.", "Thank you.")."""
+    words = re.findall(r"[a-z]+(?:-[a-z]+)*", text.lower())
+    return bool(words) and len(words) <= 3 and seconds < FILLER_MAX_SECONDS and all(w in FILLER_WORDS for w in words)
+
 
 def model_download_bytes(cache=None):
     """Bytes of partial model downloads in the Hugging Face cache (0 when nothing is downloading)."""
