@@ -42,7 +42,7 @@ def dictation_class():
     cls = next(node for node in source.body if isinstance(node, ast.ClassDef) and node.name == "Dictation")
     env = dict(np=np, queue=queue, threading=threading, time=time, log=logging.getLogger("voice-tests"),
                AppHelper=types.SimpleNamespace(callAfter=lambda f, *args: f(*args)),
-               SAMPLE_RATE=16000, MIN_AUDIO_SECONDS=.35, TAP_SECONDS=.3,
+               SAMPLE_RATE=16000, MIN_AUDIO_SECONDS=.35, TAP_SECONDS=.3, DOUBLE_TAP_SECONDS=.45,
                START_SOUND="start", STOP_SOUND="stop", play=Mock(), frontmost_app=Mock(return_value="Test"),
                apply_replacements=lambda text: text, AXIsProcessTrustedWithOptions=Mock(return_value=True), paste=Mock(),
                is_filler_only=filler_function())
@@ -751,10 +751,42 @@ class VoiceTests(unittest.TestCase):
         d.on_fn(True, 0.0); d.on_fn(False, 0.1)
         self.assertFalse(d.hands_free)
         d.on_fn(True, 1.0)
-        self.assertEqual(d.start.call_count, 2); d.stop.assert_not_called()
-        # A real hands-free recording is still ended by the next tap.
-        d.recording = True; d.on_fn(False, 1.1); self.assertTrue(d.hands_free)
-        d.on_fn(True, 2.0); d.stop.assert_called_once_with()
+        self.assertEqual(d.start.call_count, 2)
+
+    def fn_dictation(self):
+        cls, env = dictation_class()
+        d = cls.__new__(cls); d.voice_control = self.c
+        d.recording = False; d.hands_free = False; d.fn_down = False; d.combo = False
+        def start(): d.recording = True
+        def stop(keep=True, **kw): d.recording = False; d.hands_free = False
+        d.start = Mock(side_effect=start); d.stop = Mock(side_effect=stop)
+        env["DOUBLE_TAP_SECONDS"] = .45
+        return d
+
+    def test_single_fn_tap_records_nothing(self):
+        d = self.fn_dictation()
+        d.on_fn(True, 0.0); d.on_fn(False, 0.1)
+        d.stop.assert_called_once_with(keep=False)
+        self.assertFalse(d.recording); self.assertFalse(d.hands_free)
+
+    def test_double_fn_tap_starts_and_stops_hands_free(self):
+        d = self.fn_dictation()
+        d.on_fn(True, 0.0); d.on_fn(False, 0.1); d.on_fn(True, 0.3); d.on_fn(False, 0.4)
+        self.assertTrue(d.recording); self.assertTrue(d.hands_free)
+        d.on_fn(True, 5.0); d.on_fn(False, 5.1)      # one tap while listening: keeps going
+        self.assertTrue(d.recording)
+        d.on_fn(True, 5.3)                            # second tap: stops and pastes
+        self.assertFalse(d.recording); d.stop.assert_called_with()
+
+    def test_two_slow_taps_are_two_single_taps(self):
+        d = self.fn_dictation()
+        d.on_fn(True, 0.0); d.on_fn(False, 0.1); d.on_fn(True, 2.0); d.on_fn(False, 2.1)
+        self.assertFalse(d.recording); self.assertFalse(d.hands_free)
+
+    def test_holding_fn_still_dictates(self):
+        d = self.fn_dictation()
+        d.on_fn(True, 0.0); self.assertTrue(d.recording)
+        d.on_fn(False, 2.5); d.stop.assert_called_once_with()
 
     def test_unreported_text_box_is_pasted_only_in_the_same_app(self):
         cls, env = dictation_class()

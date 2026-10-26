@@ -1,7 +1,7 @@
 """Push-to-talk dictation with no menu or window, just a small listening pill.
 
 Hold Fn: record while held, transcribe and paste on release.
-Tap Fn: hands-free mode; tap Fn again to stop and paste.
+Double-tap Fn: hands-free mode; double-tap Fn again to stop and paste. A single tap does nothing.
 Fn combined with another key (Fn+arrow, Fn+F1, ...) cancels the recording.
 
 Runs local GPU or CPU speech according to the selected backend. Every dictation is saved
@@ -53,7 +53,8 @@ from PyObjCTools import AppHelper
 try:
     _engine_config=json.loads((Path.home()/'Library/Application Support/Pico/VoiceBridge/config.json').read_text())
 except (OSError,ValueError):_engine_config={}
-TAP_SECONDS = 0.30        # shorter Fn press = tap (toggle hands-free)
+TAP_SECONDS = 0.30        # shorter Fn press = tap
+DOUBLE_TAP_SECONDS = 0.45 # gap between two Fn taps that toggles hands-free
 MIN_AUDIO_SECONDS = 0.35  # ignore anything shorter
 SAMPLE_RATE = 16000
 LONG_AUDIO_SECONDS = 180  # longer recordings go through Parakeet's chunked path
@@ -853,11 +854,16 @@ class Dictation:
     def on_fn(self, down: bool, now: float):
         if not self.voice_control.config.get("dictationEnabled", True) or self.voice_control.long_mode:
             return
+        # Hold Fn to dictate. A single tap does nothing (an accidental tap used to start
+        # recording); double-tap Fn to start hands-free recording, and double-tap again to stop.
+        last_tap = getattr(self, 'fn_tap_at', None)
         if down and not self.fn_down:
             self.fn_down, self.fn_down_at, self.combo = True, now, False
             if self.hands_free and self.recording:
-                self.stop()             # second tap ends hands-free mode
-                self.fn_down = False    # so the matching release is ignored
+                if last_tap is not None and now - last_tap <= DOUBLE_TAP_SECONDS:
+                    self.fn_tap_at = None
+                    self.stop()             # second tap of a double tap ends hands-free mode
+                    self.fn_down = False    # so the matching release is ignored
             else:
                 self.hands_free = False  # a refused earlier tap must not swallow this press
                 self.start()
@@ -866,8 +872,16 @@ class Dictation:
             if self.combo:
                 self.stop(keep=False)
             elif now - self.fn_down_at < TAP_SECONDS:
-                self.hands_free = self.recording  # quick tap: keep listening
+                if self.hands_free and self.recording:
+                    self.fn_tap_at = now            # first tap of the double tap that stops
+                elif self.recording and last_tap is not None and now - last_tap <= DOUBLE_TAP_SECONDS + TAP_SECONDS:
+                    self.fn_tap_at = None
+                    self.hands_free = True          # second tap: keep listening hands-free
+                else:
+                    self.stop(keep=False)           # a single tap: discard, paste nothing
+                    self.fn_tap_at = now
             else:
+                self.fn_tap_at = None
                 self.stop()
 
     def on_other_key(self):

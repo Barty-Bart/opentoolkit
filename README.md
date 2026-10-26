@@ -87,7 +87,7 @@ It waits until you're not dictating or recording, downloads the release from thi
 
 | Action | Default |
 | --- | --- |
-| Dictate | Hold Fn, or tap to toggle |
+| Dictate | Hold Fn, or double-tap Fn for hands-free |
 | Start or stop dictation | ⌥ ⌘ T |
 | Paste last transcript again | Double-tap Shift |
 | Open dictation history | Triple-tap Shift |
