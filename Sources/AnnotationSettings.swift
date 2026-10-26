@@ -37,11 +37,17 @@ struct DrawingToolShortcutRows:View {
                     Picker("Key",selection:Binding(get:{parts(name).1},set:{update(name,parts(name).0,$0)})) {
                         ForEach(Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ`").map(String.init),id:\.self){Text($0).tag($0)}
                     }.labelsHidden().frame(width:85)
+                    if let clash=Self.clash(parts(name)) {Label(clash,systemImage:"exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange).help("While you're drawing, this replaces that shortcut in every app.")}
                 }
             }
+            Text("These keys only work while you're drawing on screen.").font(.caption).foregroundStyle(.secondary)
+            Button("Reset drawing keys to the defaults"){for (name,chord) in AnnotationSettings.defaults where actions.contains(name) {model.annotationKeys[name]=chord};UserDefaults.standard.set(model.annotationKeys,forKey:"annotationKeys");model.registerDrawingTools()}
             if !issue.isEmpty {Label(issue,systemImage:"exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)}
         }
     }
+    /// Everyday ⌘ shortcuts a drawing key would take over while drawing.
+    static let everyday=["A":"Select All","C":"Copy","D":"Duplicate/Bookmark","F":"Find","G":"Find Next","N":"New","O":"Open","P":"Print","Q":"Quit","S":"Save","T":"New Tab","V":"Paste","W":"Close","X":"Cut","Z":"Undo"]
+    static func clash(_ chord:(String,String))->String? {chord.0=="cmd" ? everyday[chord.1].map{"Clashes with ⌘\(chord.1) \($0)"}:nil}
     private func parts(_ name:String)->(String,String) {let parts=(model.annotationKeys[name] ?? AnnotationSettings.defaults[name]!).split(separator:"+").map(String.init);return (parts.first ?? "ctrl",parts.last ?? "S")}
     private func update(_ name:String,_ modifier:String,_ key:String) {
         let chord=modifier+"+"+key

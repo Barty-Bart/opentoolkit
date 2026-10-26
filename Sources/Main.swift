@@ -271,7 +271,7 @@ struct RootView:View {
         if model.voice.settings.dictationEnabled {list.append(("Speak",[.voice,.history,.corrections]))}
         let capture=(model.enabled("screenshots") ? [ToolPage.capture]:[])+(model.enabled("recording") ? [.recording]:[])
         if !capture.isEmpty {list.append(("Capture",capture))}
-        if model.enabled("drawing") {list.append(("Draw",[.drawing]))}
+        list.append(("Draw",[.drawing]))   // shown even when off; the page has the switch
         if model.enabled("organizer") {list.append(("",[.organizer]))}
         return list
     }
@@ -533,11 +533,12 @@ struct ContinuousView:View {
             if model.recording.isRecording {tool("Stop Recording","recording",shortcut:"recording")}
             else {tool("Record Screen…","recording",shortcut:"recording");tool("Record GIF…","mode:gif")}
         }
+        // Draw stays in the menu when it's off, so it's easy to find and switch back on.
+        heading("Draw")
         if model.enabled("drawing") {
-            heading("Draw")
             tool(model.capture.isDrawingActive ? "Stop Drawing":"Draw on Screen","drawing",shortcut:"drawing")
             tool("Clear Drawing","clearDrawing")
-        }
+        } else {tool("Turn On Draw on Screen…","enable:drawing")}
         if model.voice.settings.dictationEnabled {
             heading("Dictation")
             if model.voice.state.modelError == true {
@@ -558,6 +559,7 @@ struct ContinuousView:View {
         if model.enabled("organizer") {tool("Notes…","notes",shortcut:"notes")}
         menu.addItem(.separator())
         add(menu,"Open OpenToolkit",#selector(showAction),"")
+        tool("Keyboard Shortcuts…","page:shortcuts")
         add(menu,"Settings…",#selector(settingsAction),",")
         add(menu,"Check for Updates…",#selector(updateAction),"")
         menu.addItem(.separator())
@@ -611,6 +613,8 @@ struct ContinuousView:View {
         case "page:screenshotHistory":model.capture.showRecentHistory()
         case "page:dictationHistory":model.historyFilter=nil;model.page = .history;show()
         case "page:voice":model.page = .voice;show()
+        case "page:shortcuts":model.settingsSection = .shortcuts;model.page = .settings;show()
+        case "enable:drawing":model.toggle("drawing",true);model.page = .drawing;show()
         default:model.perform(action)
         }
     }

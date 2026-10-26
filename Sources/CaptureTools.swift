@@ -135,15 +135,15 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
         if let current = selectionWindows.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) { current.makeKeyAndOrderFront(nil) }
         // The real pointer becomes the coloured crosshair, so nothing trails behind it.
-        let cursor = CaptureCrosshair.cursor()
-        cursor.push()
+        // Push the coloured crosshair once and pop it when the selection closes. Setting the cursor
+        // again on every move (0.3.9–0.3.14) could leave it stuck as a crosshair after the capture.
+        CaptureCrosshair.cursor().push()
         // Follow the pointer onto any display; that display's overlay takes Escape.
         let follow: () -> Void = { [weak self, weak state] in
             // Pointer events queued before the selection closed must not bring the crosshair back.
             guard let self, let state, !self.selectionWindows.isEmpty, self.selectionGeneration == generation else { return }
             let p = NSEvent.mouseLocation
             state.moved(to: p)
-            cursor.set()
             if let window = self.selectionWindows.first(where: { NSMouseInRect(p, $0.frame, false) }), !window.isKeyWindow { window.makeKey() }
         }
         if let global = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { _ in Task { @MainActor in follow() } }) { selectionMonitors.append(global) }
@@ -238,7 +238,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         for window in selectionWindows { window.orderOut(nil); window.close() }
         selectionWindows.removeAll()
         // The crosshair was set directly as well as pushed, so restore the arrow explicitly.
-        if hadSelection { NSCursor.pop(); NSCursor.arrow.set() }
+        if hadSelection { NSCursor.pop() }
     }
 
     func endDrawing() {
@@ -668,7 +668,6 @@ fileprivate final class SelectionState {
     var anchor: CGPoint?
     var selection: CGRect?
     var views: [RegionSelectionView] = []
-    let cursor = CaptureCrosshair.cursor()
     init(fixedSize: CGSize?) { self.fixedSize = fixedSize }
     func refresh() { views.forEach { $0.needsDisplay = true } }
     private func fixedRect(at p: CGPoint) -> CGRect {
@@ -698,12 +697,10 @@ fileprivate final class RegionSelectionView: NSView {
     // Without this, a display's overlay never hears the pointer arrive while another app is active.
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
-        tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(tracking!); super.updateTrackingAreas()
     }
-    override func mouseEntered(with event: NSEvent) { guard window?.isVisible == true else { return }; state.moved(to: NSEvent.mouseLocation); window?.makeKey(); state.cursor.set() }
-    override func cursorUpdate(with event: NSEvent) { if window?.isVisible == true { state.cursor.set() } }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: state.cursor) }
+    override func mouseEntered(with event: NSEvent) { guard window?.isVisible == true else { return }; state.moved(to: NSEvent.mouseLocation); window?.makeKey() }
     /// This display's frame in global coordinates; drawing converts global points into it.
     private var screenFrame: CGRect { window?.frame ?? .zero }
     private func local(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x - screenFrame.minX, y: p.y - screenFrame.minY) }
