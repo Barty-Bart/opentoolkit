@@ -73,6 +73,12 @@ enum ToolPage: String, CaseIterable, Identifiable {
         voice.onEvent={ [weak self] event in self?.receive(event) }
         capture.onStatus={ [weak self] text in self?.notice=text }
         capture.onShowAllHistory={ [weak self] in self?.page = .capture;self?.showWindow?() }
+        // Escape cancels a capture selection without the overlay taking keyboard focus.
+        capture.onSelectionActive={ [weak self] active in
+            guard let self else{return}
+            hotkeys?.clear(group:"selection")
+            if active {hotkeys?.register(key:"Escape",modifiers:0,group:"selection"){ [weak self] in self?.capture.cancel() }}
+        }
         capture.onDrawingActiveChanged={ [weak self] active in
             guard let self else{return}
             if active {drawingStartedAt=Date()}
@@ -215,7 +221,7 @@ enum ToolPage: String, CaseIterable, Identifiable {
     }
 }
 final class Hotkeys {
-    static let codes:[String:UInt32]=["A":0,"S":1,"D":2,"F":3,"H":4,"G":5,"Z":6,"X":7,"C":8,"V":9,"B":11,"Q":12,"W":13,"E":14,"R":15,"Y":16,"T":17,"O":31,"U":32,"I":34,"P":35,"L":37,"J":38,"K":40,"N":45,"M":46,"`":50,"1":18,"2":19,"3":20,"4":21,"5":23,"6":22,"7":26,"8":28,"9":25,"0":29,"Space":49,"F1":122,"F2":120,"F3":99,"F4":118,"F5":96,"F6":97,"F7":98,"F8":100,"F9":101,"F10":109,"F11":103,"F12":111]
+    static let codes:[String:UInt32]=["A":0,"S":1,"D":2,"F":3,"H":4,"G":5,"Z":6,"X":7,"C":8,"V":9,"B":11,"Q":12,"W":13,"E":14,"R":15,"Y":16,"T":17,"O":31,"U":32,"I":34,"P":35,"L":37,"J":38,"K":40,"N":45,"M":46,"`":50,"1":18,"2":19,"3":20,"4":21,"5":23,"6":22,"7":26,"8":28,"9":25,"0":29,"Space":49,"ESCAPE":53,"F1":122,"F2":120,"F3":99,"F4":118,"F5":96,"F6":97,"F7":98,"F8":100,"F9":101,"F10":109,"F11":103,"F12":111]
     private var refs:[UInt32:(ref:EventHotKeyRef,group:String)]=[:]
     private var nextID:UInt32=1
     private var callbacks:[UInt32:()->Void]=[:]

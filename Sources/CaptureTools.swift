@@ -38,6 +38,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var stickyDrawing = false
     /// Tool shortcuts are global hotkeys, so they exist only while drawing is on.
     var onDrawingActiveChanged: ((Bool) -> Void)?
+    /// While a capture selection is on screen (the app registers a temporary Escape shortcut).
+    var onSelectionActive: ((Bool) -> Void)?
     var isDrawingActive: Bool { heldDrawingTool != nil }
     /// Remembered screen-drawing colour (Annotation page swatches, palette and colour keys).
     private var annotationColor: NSColor { get { AnnotationColor.saved } set { AnnotationColor.save(newValue) } }
@@ -129,11 +131,12 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                 self.finishSelection(global)
             }
             window.contentView = selector
-            window.makeKeyAndOrderFront(nil)
-            window.makeFirstResponder(selector)
+            // Shown without taking keyboard focus, so your app's text box keeps it and the
+            // first click after the capture lands there (e.g. to drop the screenshot in).
+            window.orderFrontRegardless()
             selectionWindows.append(window)
         }
-        if let current = selectionWindows.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) { current.makeKeyAndOrderFront(nil) }
+        onSelectionActive?(true)
         // The real pointer becomes the coloured crosshair, so nothing trails behind it.
         // Push the coloured crosshair once and pop it when the selection closes. Setting the cursor
         // again on every move (0.3.9–0.3.14) could leave it stuck as a crosshair after the capture.
@@ -144,7 +147,6 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             guard let self, let state, !self.selectionWindows.isEmpty, self.selectionGeneration == generation else { return }
             let p = NSEvent.mouseLocation
             state.moved(to: p)
-            if let window = self.selectionWindows.first(where: { NSMouseInRect(p, $0.frame, false) }), !window.isKeyWindow { window.makeKey() }
         }
         if let global = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { _ in Task { @MainActor in follow() } }) { selectionMonitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { event in follow(); return event }) { selectionMonitors.append(local) }
@@ -238,7 +240,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         for window in selectionWindows { window.orderOut(nil); window.close() }
         selectionWindows.removeAll()
         // The crosshair was set directly as well as pushed, so restore the arrow explicitly.
-        if hadSelection { NSCursor.pop() }
+        if hadSelection { NSCursor.pop(); onSelectionActive?(false) }
     }
 
     func endDrawing() {
@@ -643,7 +645,7 @@ private final class CaptureSelectionPanel: NSPanel {
         level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     }
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
 
@@ -700,13 +702,15 @@ fileprivate final class RegionSelectionView: NSView {
         tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(tracking!); super.updateTrackingAreas()
     }
-    override func mouseEntered(with event: NSEvent) { guard window?.isVisible == true else { return }; state.moved(to: NSEvent.mouseLocation); window?.makeKey() }
+    override func mouseEntered(with event: NSEvent) { guard window?.isVisible == true else { return }; state.moved(to: NSEvent.mouseLocation) }
+    // The overlay never becomes key, so it must take the very first click itself.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     /// This display's frame in global coordinates; drawing converts global points into it.
     private var screenFrame: CGRect { window?.frame ?? .zero }
     private func local(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x - screenFrame.minX, y: p.y - screenFrame.minY) }
     // Global pointer positions keep working when a drag leaves this display.
     override func mouseMoved(with event: NSEvent) { state.moved(to: NSEvent.mouseLocation) }
-    override func mouseDown(with event: NSEvent) { window?.makeKey(); state.began(at: NSEvent.mouseLocation) }
+    override func mouseDown(with event: NSEvent) { state.began(at: NSEvent.mouseLocation) }
     override func mouseDragged(with event: NSEvent) { state.dragged(to: NSEvent.mouseLocation) }
     override func mouseUp(with event: NSEvent) { if let selection = state.selection { onComplete?(selection) } }
     override func keyDown(with event: NSEvent) { if event.keyCode == 53 { onCancel?() } else { super.keyDown(with: event) } }
