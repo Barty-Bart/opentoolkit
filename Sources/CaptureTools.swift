@@ -140,7 +140,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         // The real pointer becomes the coloured crosshair, so nothing trails behind it.
         // Push the coloured crosshair once and pop it when the selection closes. Setting the cursor
         // again on every move (0.3.9–0.3.14) could leave it stuck as a crosshair after the capture.
-        CaptureCrosshair.cursor().push()
+        CaptureCrosshair.begin()
         // Follow the pointer onto any display; that display's overlay takes Escape.
         let follow: () -> Void = { [weak self, weak state] in
             // Pointer events queued before the selection closed must not bring the crosshair back.
@@ -240,7 +240,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         for window in selectionWindows { window.orderOut(nil); window.close() }
         selectionWindows.removeAll()
         // The crosshair was set directly as well as pushed, so restore the arrow explicitly.
-        if hadSelection { NSCursor.pop(); onSelectionActive?(false) }
+        if hadSelection { CaptureCrosshair.end(); onSelectionActive?(false) }
     }
 
     func endDrawing() {
@@ -702,14 +702,14 @@ fileprivate final class RegionSelectionView: NSView {
         tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(tracking!); super.updateTrackingAreas()
     }
-    override func mouseEntered(with event: NSEvent) { guard window?.isVisible == true else { return }; state.moved(to: NSEvent.mouseLocation) }
+    override func mouseEntered(with event: NSEvent) { guard window?.isVisible == true else { return }; CaptureCrosshair.reassert(); state.moved(to: NSEvent.mouseLocation) }
     // The overlay never becomes key, so it must take the very first click itself.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     /// This display's frame in global coordinates; drawing converts global points into it.
     private var screenFrame: CGRect { window?.frame ?? .zero }
     private func local(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x - screenFrame.minX, y: p.y - screenFrame.minY) }
     // Global pointer positions keep working when a drag leaves this display.
-    override func mouseMoved(with event: NSEvent) { state.moved(to: NSEvent.mouseLocation) }
+    override func mouseMoved(with event: NSEvent) { CaptureCrosshair.reassert(); state.moved(to: NSEvent.mouseLocation) }
     override func mouseDown(with event: NSEvent) { state.began(at: NSEvent.mouseLocation) }
     override func mouseDragged(with event: NSEvent) { state.dragged(to: NSEvent.mouseLocation) }
     override func mouseUp(with event: NSEvent) { if let selection = state.selection { onComplete?(selection) } }
@@ -827,6 +827,31 @@ enum CaptureCrosshair {
             return true
         }
         return NSCursor(image: image, hotSpot: NSPoint(x: c, y: c))
+    }
+
+    /// The crosshair while a selection is on screen, nil otherwise.
+    private static var active: NSCursor?
+    /// Show the crosshair for a selection. The overlay never takes focus (0.3.18), and macOS
+    /// ignores cursor changes from an app that isn't in front, so the pointer stayed an arrow.
+    /// Allow this app to set the cursor from the background first.
+    static func begin() {
+        allowCursorInBackground()
+        let cursor = cursor(); active = cursor; cursor.push()
+    }
+    static func end() { guard active != nil else { return }; active = nil; NSCursor.pop() }
+    /// The app in front may set its own cursor again; the overlay puts the crosshair back on move.
+    static func reassert() { if let active, NSCursor.current !== active { active.set() } }
+
+    private static var backgroundCursorAllowed = false
+    private static func allowCursorInBackground() {
+        guard !backgroundCursorAllowed else { return }
+        backgroundCursorAllowed = true
+        typealias DefaultConnection = @convention(c) () -> Int32
+        typealias SetProperty = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
+        let handle = dlopen(nil, RTLD_NOW)
+        guard let connection = dlsym(handle, "_CGSDefaultConnection"), let setProperty = dlsym(handle, "CGSSetConnectionProperty") else { return }
+        let cid = unsafeBitCast(connection, to: DefaultConnection.self)()
+        _ = unsafeBitCast(setProperty, to: SetProperty.self)(cid, cid, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
     }
 }
 
