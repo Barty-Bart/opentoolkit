@@ -18,7 +18,7 @@ Local dictation, screenshots, screen drawing and recording in one free Mac app. 
 | **Dictation history** | **Double-tap Shift** to paste your last transcript again. **Triple-tap** to open everything you've dictated. The key is customisable. |
 | **Hey Toolkit** | Say the wake phrase, wait for the cue, then a command: start dictating, take a screenshot, draw on screen, record my screen. A glow around the pointer shows it's listening. Optional and off until you turn it on. |
 | **Screenshots** | Hold **⇧⌘4** and drag an area, on any display. Let go before dragging to cancel. Thumbnails stack in the corner of the display you're on; drag one into another app, or double-click to edit. |
-| **Capture bar** | **⇧⌘5** opens a glass capture bar: full screen, fixed dimensions, scrolling capture, video and GIF. |
+| **Capture bar** | **⇧⌘5** opens a glass capture bar: full screen, fixed dimensions, scrolling capture (Auto-scroll scrolls and captures for you; press Escape to stop), video and GIF. |
 | **Screenshot editor** | A real canvas you can resize, a second image as its own layer, pinch to zoom. Arrows, shapes, text, numbered steps, redaction and a highlighter that snaps onto words. |
 | **Screen drawing** | **⌥⌘D** to draw over your screen. Press it again to stop, or hold it to draw only while it's held. Marks stay until you clear them. |
 | **Screen recording** | Record a region as video or GIF. Optionally show a larger cursor, a highlight ring and click ripples. |
