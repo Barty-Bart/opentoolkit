@@ -43,6 +43,7 @@ class RecoveryGesture:
         self.last_up = None
         self.count = 0
         self.blocked = False
+        self.started = None  # when the first tap's key went down
     def feed(self, key, down, clean, now):
         if key != self.key or key == 'off':
             self.key = key; self.reset()
@@ -57,6 +58,7 @@ class RecoveryGesture:
         if down:
             if self.last_up is not None and now-self.last_up > .45: self.reset()
             if self.down_at is None: self.down_at = now
+            if self.count == 0: self.started = now
             return None
         if self.down_at is None: return None
         short = now-self.down_at <= .30

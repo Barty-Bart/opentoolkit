@@ -122,6 +122,14 @@ class RecoveryTests(unittest.TestCase):
         g.feed('shift',True,True,.5)
         self.assertIsNone(g.finish(.7))
         self.assertEqual(g.feed('shift',False,True,.72),'history')
+    def test_capital_between_taps_never_pastes(self):
+        # Shift, Shift+P, Shift: the letter blocks the gesture.
+        g=v.RecoveryGesture();self.tap(g,0)
+        g.feed('shift',True,True,.2);g.feed('shift',True,False,.25);g.feed('shift',False,True,.3)
+        self.assertIsNone(self.tap(g,.4));self.assertIsNone(g.finish(1))
+    def test_started_marks_first_tap(self):
+        g=v.RecoveryGesture();self.tap(g,1.0);self.tap(g,1.2)
+        self.assertEqual(g.started,1.0)
     def test_typing_shortcut_cancels_pending_paste(self):
         g=v.RecoveryGesture();self.tap(g,0);self.tap(g,.15)
         g.feed('shift',False,False,.3)

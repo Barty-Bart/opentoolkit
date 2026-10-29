@@ -897,6 +897,15 @@ def make_tap(dictation):
     holder = {}
     from voice_control import RecoveryGesture
     recovery = RecoveryGesture()
+    def nothing_typed_since(started):
+        # Ask macOS itself, not only our listener: a key or click it never passed on
+        # (Shift, P, Shift) must not turn two capitals into a double tap.
+        if started is None: return False
+        elapsed = time.monotonic() - started
+        state = Quartz.kCGEventSourceStateHIDSystemState
+        since = min(Quartz.CGEventSourceSecondsSinceLastEventType(state, t) for t in (Quartz.kCGEventKeyDown, Quartz.kCGEventLeftMouseDown, Quartz.kCGEventRightMouseDown))
+        return since >= elapsed
+
     def handle_recovery(key, down, clean, now):
         result = recovery.feed(key, down, clean, now)
         if result == 'history':
@@ -905,8 +914,9 @@ def make_tap(dictation):
             from voice_control import focus
             target = focus()
             revision = dictation.input_revision
+            started = recovery.started
             def finish(timer):
-                if recovery.finish(time.monotonic()) == 'paste' and revision == dictation.input_revision:
+                if recovery.finish(time.monotonic()) == 'paste' and revision == dictation.input_revision and nothing_typed_since(started):
                     dictation.voice_control.recover_last(target)
             NSTimer.scheduledTimerWithTimeInterval_repeats_block_(.46,False,finish)
 
