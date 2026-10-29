@@ -17,7 +17,7 @@ Local dictation, screenshots, screen drawing and recording in one free Mac app. 
 | **Dictation** | Hold **Fn** and speak into the text box you're in, or double-tap **Fn** to talk hands-free and double-tap again to stop. Speech is transcribed on your Mac with Parakeet or Whisper. Switch to AirPods or a headset and it picks up the new microphone by itself. |
 | **Dictation history** | **Double-tap Shift** to paste your last transcript again. **Triple-tap** to open everything you've dictated. The key is customisable. |
 | **Hey Toolkit** | Say the wake phrase, wait for the cue, then a command: start dictating, take a screenshot, draw on screen, record my screen. A glow around the pointer shows it's listening. Optional and off until you turn it on. |
-| **Screenshots** | **⇧⌘4** for an area, on any display. Thumbnails stack in the corner of the display you're on; drag one into another app, or double-click to edit. |
+| **Screenshots** | Hold **⇧⌘4** and drag an area, on any display. Let go before dragging to cancel. Thumbnails stack in the corner of the display you're on; drag one into another app, or double-click to edit. |
 | **Capture bar** | **⇧⌘5** opens a glass capture bar: full screen, fixed dimensions, scrolling capture, video and GIF. |
 | **Screenshot editor** | A real canvas you can resize, a second image as its own layer, pinch to zoom. Arrows, shapes, text, numbered steps, redaction and a highlighter that snaps onto words. |
 | **Screen drawing** | **⌥⌘D** to draw over your screen. Press it again to stop, or hold it to draw only while it's held. Marks stay until you clear them. |

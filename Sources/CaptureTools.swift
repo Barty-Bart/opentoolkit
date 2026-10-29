@@ -30,6 +30,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var cleanupTimer: Timer?
     @Published var retentionHours = UserDefaults.standard.object(forKey:"captureRetentionHours") as? Int ?? 24
     private var selectionWindows: [CaptureSelectionPanel] = []
+    private var selectionState: SelectionState?
     private var annotationWindows: [ToolOverlayWindow] = []
     private var liveSurfaces: [DrawingSurface] = []
     private var drawingOwner: NSRunningApplication?
@@ -120,8 +121,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         hideCapturePreviews()
         selectionGeneration += 1
         let generation = selectionGeneration
-        report(fixedSize == nil ? "Drag an area to capture · Escape to cancel" : "Move the fixed frame, then click or drag to capture · Escape to cancel")
+        report(fixedSize == nil ? "Drag an area to capture · let go of the shortcut or press Escape to cancel" : "Move the fixed frame, then click or drag to capture · Escape to cancel")
         let state = SelectionState(fixedSize: fixedSize)
+        selectionState = state
         for screen in NSScreen.screens {
             let window = CaptureSelectionPanel(frame: screen.frame)
             let selector = RegionSelectionView(frame: window.contentView!.bounds, state: state)
@@ -238,9 +240,16 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         selectionPoll?.invalidate(); selectionPoll = nil
         let hadSelection = !selectionWindows.isEmpty
         for window in selectionWindows { window.orderOut(nil); window.close() }
-        selectionWindows.removeAll()
+        selectionWindows.removeAll(); selectionState = nil
         // The crosshair was set directly as well as pushed, so restore the arrow explicitly.
         if hadSelection { CaptureCrosshair.end(); onSelectionActive?(false) }
+    }
+
+    /// The screenshot shortcut is held while you drag: letting go before a drag starts cancels.
+    /// A drag already under way still finishes when the mouse button comes up.
+    func regionKeyReleased() {
+        guard let state = selectionState, state.fixedSize == nil, state.anchor == nil else { return }
+        cancel()
     }
 
     func endDrawing() {
@@ -707,30 +716,16 @@ fileprivate final class RegionSelectionView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     /// This display's frame in global coordinates; drawing converts global points into it.
     private var screenFrame: CGRect { window?.frame ?? .zero }
-    private func local(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x - screenFrame.minX, y: p.y - screenFrame.minY) }
     // Global pointer positions keep working when a drag leaves this display.
     override func mouseMoved(with event: NSEvent) { CaptureCrosshair.reassert(); state.moved(to: NSEvent.mouseLocation) }
     override func mouseDown(with event: NSEvent) { state.began(at: NSEvent.mouseLocation) }
     override func mouseDragged(with event: NSEvent) { state.dragged(to: NSEvent.mouseLocation) }
     override func mouseUp(with event: NSEvent) { if let selection = state.selection { onComplete?(selection) } }
     override func keyDown(with event: NSEvent) { if event.keyCode == 53 { onCancel?() } else { super.keyDown(with: event) } }
-    /// Coordinates beside the pointer. The crosshair itself is the system cursor
-    /// (`CaptureCrosshair.cursor()`), so it never lags behind the pointer.
-    private func drawCrosshair(at p: CGPoint) {
-        let x = p.x.rounded() + 0.5, y = p.y.rounded() + 0.5
-        let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
-        let global = CGPoint(x: screenFrame.minX + p.x, y: screenFrame.minY + p.y)
-        let label = "\(Int(global.x)), \(Int(primaryTop - global.y))"
-        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.white, .backgroundColor: NSColor.black.withAlphaComponent(0.65)]
-        let size = (label as NSString).size(withAttributes: attrs)
-        (label as NSString).draw(at: CGPoint(x: min(x + 14, bounds.maxX - size.width - 4), y: max(4, y - size.height - 14)), withAttributes: attrs)
-    }
     override func draw(_ dirtyRect: NSRect) {
         // Keep the screen at its normal brightness. Only the selection outline,
-        // the small crosshair and compact help labels are drawn over the underlying app.
+        // compact help labels are drawn over the underlying app; the pointer itself is the crosshair.
         NSColor.clear.setFill(); bounds.fill(using: .copy)
-        let pointerHere = state.pointer.map { NSMouseInRect($0, screenFrame, false) } ?? false
-        if state.fixedSize == nil, state.anchor == nil, pointerHere, let p = state.pointer { drawCrosshair(at: local(p)) }
         if let global = state.selection, global.width > 0, global.height > 0 {
             let selection = global.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY)
             let outline = NSBezierPath(rect: selection)
@@ -743,6 +738,7 @@ fileprivate final class RegionSelectionView: NSView {
                 (label as NSString).draw(at: CGPoint(x: selection.minX + 5, y: max(5, selection.minY - 23)), withAttributes: attrs)
             }
         }
+        let pointerHere = state.pointer.map { NSMouseInRect($0, screenFrame, false) } ?? false
         guard pointerHere || state.pointer == nil else { return }
         let hint = state.fixedSize == nil ? "Drag to select an area • You can drag across displays • Escape cancels" : "Move the frame • Click or drag to capture • Escape cancels"
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white]

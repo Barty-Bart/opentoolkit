@@ -109,6 +109,8 @@ enum ToolPage: String, CaseIterable, Identifiable {
     func registerHotkeys(){hotkeys?.clear();shortcutIssues=[:];for (action,key) in keys {guard !key.isEmpty,enabled(action=="notes" || action=="reminders" ? "organizer":(["fullScreenshot","captureOptions"].contains(action) ? "screenshots":action)) else{continue}
             let registered=action=="drawing"
                 ? hotkeys?.register(key:key,modifiers:modifiers(action),release:{[weak self] in self?.drawingKeyReleased()},action:{[weak self] in self?.drawingKeyPressed()})
+                : action=="screenshots"
+                ? hotkeys?.register(key:key,modifiers:modifiers(action),release:{[weak self] in self?.capture.regionKeyReleased()},action:{[weak self] in self?.perform(action)})
                 : hotkeys?.register(key:key,modifiers:modifiers(action),action:{[weak self] in self?.perform(action)})
             if registered == false {shortcutIssues[action]="macOS or another app is already using \(shortcutLabel(key,modifiers(action))). Choose another combination or turn it off in that app.";notice="Shortcut unavailable: \(shortcutLabel(key,modifiers(action)))"}};UserDefaults.standard.set(keys,forKey:"shortcuts")
         registerDrawingTools()
