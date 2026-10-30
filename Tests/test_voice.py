@@ -173,6 +173,8 @@ class RecoveryEventTapTests(unittest.TestCase):
         q.CGEventGetFlags.side_effect=lambda e:e['flags']
         q.CGEventGetIntegerValueField.side_effect=lambda e,f:e.get('tag',0) if f==Quartz.kCGEventSourceUserData else e['code']
         q.CGEventTapCreate.side_effect=lambda a,b,c,m,cb,r:callbacks.append(cb) or 'tap'
+        # Never read the real keyboard: nothing has been typed on this pretend Mac.
+        q.CGEventSourceSecondsSinceLastEventType.side_effect=lambda state,kind:1e9
         timers=[]
         timer=types.SimpleNamespace(scheduledTimerWithTimeInterval_repeats_block_=lambda delay,repeat,f:timers.append(f))
         env={'Quartz':q,'NSTimer':timer,'AppHelper':types.SimpleNamespace(callAfter=lambda f,*a:f(*a)),
