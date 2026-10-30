@@ -30,7 +30,6 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var cleanupTimer: Timer?
     @Published var retentionHours = UserDefaults.standard.object(forKey:"captureRetentionHours") as? Int ?? 24
     private var selectionWindows: [CaptureSelectionPanel] = []
-    private var selectionState: SelectionState?
     private var annotationWindows: [ToolOverlayWindow] = []
     private var liveSurfaces: [DrawingSurface] = []
     private var drawingOwner: NSRunningApplication?
@@ -121,9 +120,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         hideCapturePreviews()
         selectionGeneration += 1
         let generation = selectionGeneration
-        report(fixedSize == nil ? "Drag an area to capture · let go of the shortcut or press Escape to cancel" : "Move the fixed frame, then click or drag to capture · Escape to cancel")
+        report(fixedSize == nil ? "Drag an area to capture · Escape to cancel" : "Move the fixed frame, then click or drag to capture · Escape to cancel")
         let state = SelectionState(fixedSize: fixedSize)
-        selectionState = state
         for screen in NSScreen.screens {
             let window = CaptureSelectionPanel(frame: screen.frame)
             let selector = RegionSelectionView(frame: window.contentView!.bounds, state: state)
@@ -240,16 +238,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         selectionPoll?.invalidate(); selectionPoll = nil
         let hadSelection = !selectionWindows.isEmpty
         for window in selectionWindows { window.orderOut(nil); window.close() }
-        selectionWindows.removeAll(); selectionState = nil
+        selectionWindows.removeAll()
         // The crosshair was set directly as well as pushed, so restore the arrow explicitly.
         if hadSelection { CaptureCrosshair.end(); onSelectionActive?(false) }
-    }
-
-    /// The screenshot shortcut is held while you drag: letting go before a drag starts cancels.
-    /// A drag already under way still finishes when the mouse button comes up.
-    func regionKeyReleased() {
-        guard let state = selectionState, state.fixedSize == nil, state.anchor == nil else { return }
-        cancel()
     }
 
     func endDrawing() {
